@@ -128,7 +128,7 @@ impl<F: Field> ExecutionGadget<F> for ErrorInvalidJumpGadget<F> {
             .bytecodes
             .get(&call.code_hash.to_word())
             .expect("could not find current environment's bytecode");
-        let code_len = code.bytes.len() as u64;
+        let code_len = code.code_length() as u64;
         self.code_len
             .assign(region, offset, Value::known(F::from(code_len)))?;
 
