@@ -677,6 +677,8 @@ pub struct ExternalData {
     pub max_rws: usize,
     /// StateCircuit -> rws
     pub rws: RwMap,
+    /// BytecodeCircuit -> bytecodes
+    pub bytecodes: HashMap<Word, Bytecode>,
 }
 
 /// Copy Circuit
@@ -747,6 +749,7 @@ impl<F: Field> SubCircuit<F> for CopyCircuit<F> {
                 txs: block.txs.clone(),
                 max_rws: block.circuits_params.max_rws,
                 rws: block.rws.clone(),
+                bytecodes: block.bytecodes.clone(),
             },
         )
     }

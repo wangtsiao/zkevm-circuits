@@ -681,7 +681,7 @@ impl MptTable {
 }
 
 /// Tag to identify the field in a Bytecode Table row
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BytecodeFieldTag {
     /// Header field
     Header,

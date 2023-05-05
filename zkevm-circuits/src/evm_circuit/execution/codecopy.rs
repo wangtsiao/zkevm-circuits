@@ -159,7 +159,7 @@ impl<F: Field> ExecutionGadget<F> for CodeCopyGadget<F> {
             .get(&call.code_hash.to_word())
             .expect("could not find current environment's bytecode");
 
-        let code_size = bytecode.code.len() as u64;
+        let code_size = bytecode.code_size() as u64;
         self.code_size
             .assign(region, offset, Value::known(F::from(code_size)))?;
 

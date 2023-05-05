@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use eth_types::{Field, ToLittleEndian, Word};
 use halo2_proofs::circuit::Value;
 use itertools::Itertools;
@@ -8,43 +6,47 @@ use crate::{evm_circuit::util::rlc, table::BytecodeFieldTag, util::Challenges};
 
 /// Bytecode
 #[derive(Clone, Debug)]
-pub struct BytecodeUnroller<F: Field> {
+pub struct BytecodeUnroller {
     /// We assume the is_code field is properly set.
     b: eth_types::Bytecode,
-    _marker: PhantomData<F>,
 }
 
-impl<F: Field> BytecodeUnroller<F> {
+impl BytecodeUnroller {
     /// Assignments for bytecode table
-    pub fn table_assignments(&self, challenges: &Challenges<Value<F>>) -> Vec<[Value<F>; 5]> {
+    pub fn table_assignments<F: Field>(
+        &self,
+        challenges: &Challenges<Value<F>>,
+    ) -> Vec<[Value<F>; 5]> {
         let hash = challenges
             .evm_word()
             .map(|challenge| rlc::value(&self.hash().to_le_bytes(), challenge));
-        self.into_iter()
+        self.clone()
+            .into_iter()
             .map(|row| {
                 [
                     hash,
-                    Value::known(row.index),
-                    Value::known(row.tag),
-                    Value::known(row.is_code),
-                    Value::known(row.value),
+                    Value::known(F::from(row.index as u64)),
+                    Value::known(F::from(row.tag as u64)),
+                    Value::known(F::from(row.is_code.into())),
+                    Value::known(F::from(row.value)),
                 ]
             })
             .collect_vec()
     }
 
     /// get byte value and is_code pair
-    pub fn get(&self, dest: usize) -> [u8; 2] {
-        self.b
-            .code
-            .get(dest)
-            .map(|b| [b.value, b.is_code.into()])
-            .expect("byte can be found")
+    pub fn get(&self, dest: usize) -> Option<(u8, bool)> {
+        self.b.code.get(dest).map(|b| (b.value, b.is_code))
     }
 
     /// The length of the bytecode
-    pub fn code_length(&self) -> usize {
+    pub fn code_size(&self) -> usize {
         self.b.code.len()
+    }
+
+    /// The length of the bytecode table
+    pub fn table_len(&self) -> usize {
+        self.b.code.len() + 1
     }
 
     /// The code hash
@@ -58,16 +60,13 @@ impl<F: Field> BytecodeUnroller<F> {
     }
 }
 
-impl<F: Field> From<&eth_types::bytecode::Bytecode> for BytecodeUnroller<F> {
+impl From<&eth_types::bytecode::Bytecode> for BytecodeUnroller {
     fn from(b: &eth_types::bytecode::Bytecode) -> Self {
-        Self {
-            b: b.clone(),
-            _marker: PhantomData,
-        }
+        Self { b: b.clone() }
     }
 }
 
-impl<F: Field> From<Vec<u8>> for BytecodeUnroller<F> {
+impl From<Vec<u8>> for BytecodeUnroller {
     fn from(b: Vec<u8>) -> Self {
         b.into()
     }
@@ -75,38 +74,38 @@ impl<F: Field> From<Vec<u8>> for BytecodeUnroller<F> {
 
 /// Public data for the bytecode
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct BytecodeRow<F: Field> {
-    pub(crate) code_hash: Word,
-    pub(crate) tag: F,
-    pub(crate) index: F,
-    pub(crate) is_code: F,
-    pub(crate) value: F,
+pub struct BytecodeRow {
+    pub code_hash: Word,
+    pub tag: BytecodeFieldTag,
+    pub index: usize,
+    pub is_code: bool,
+    pub value: u64,
 }
 
-impl<F: Field> IntoIterator for BytecodeUnroller<F> {
-    type Item = BytecodeRow<F>;
+impl IntoIterator for BytecodeUnroller {
+    type Item = BytecodeRow;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     /// We turn the bytecode in to the circuit row for Bytecode circuit or bytecode table to use.
     fn into_iter(self) -> Self::IntoIter {
         std::iter::once(Self::Item {
             code_hash: self.hash(),
-            tag: F::from(BytecodeFieldTag::Header as u64),
-            index: F::ZERO,
-            is_code: F::ZERO,
-            value: F::from(self.code_length() as u64),
+            tag: BytecodeFieldTag::Header,
+            index: 0,
+            is_code: false,
+            value: self.code_size().try_into().unwrap(),
         })
         .chain(
             self.b
                 .code
                 .iter()
                 .enumerate()
-                .map(|(idx, code)| Self::Item {
+                .map(|(index, code)| Self::Item {
                     code_hash: self.hash(),
-                    tag: F::from(BytecodeFieldTag::Byte as u64),
-                    index: F::from(idx as u64),
-                    is_code: F::from(code.is_code.into()),
-                    value: F::from(code.value.into()),
+                    tag: BytecodeFieldTag::Byte,
+                    index,
+                    is_code: code.is_code,
+                    value: code.value.into(),
                 }),
         )
         .collect_vec()
