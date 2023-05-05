@@ -82,7 +82,7 @@ impl<F: Field> Block<F> {
         let num_rows_required_for_bytecode_table: usize = self
             .bytecodes
             .values()
-            .map(|bytecode| bytecode.code_length() + 1)
+            .map(|bytecode| bytecode.code.len() + 1)
             .sum();
         let num_rows_required_for_copy_table: usize =
             self.copy_events.iter().map(|c| c.bytes.len() * 2).sum();

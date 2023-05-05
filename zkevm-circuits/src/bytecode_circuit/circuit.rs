@@ -844,7 +844,7 @@ impl<F: Field> SubCircuit<F> for BytecodeCircuit<F> {
             block
                 .bytecodes
                 .values()
-                .map(|bytecode| bytecode.code_length() + 1)
+                .map(|bytecode| bytecode.code.len() + 1)
                 .sum(),
             block.circuits_params.max_bytecode,
         )
