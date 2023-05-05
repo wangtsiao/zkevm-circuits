@@ -11,7 +11,7 @@ mod test;
 pub use dev::CopyCircuit as TestCopyCircuit;
 
 use bus_mapping::circuit_input_builder::{CopyDataType, CopyEvent};
-use eth_types::{Field, Word};
+use eth_types::Field;
 
 use gadgets::{
     binary_number::BinaryNumberChip,
@@ -24,7 +24,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use itertools::Itertools;
-use std::{collections::HashMap, marker::PhantomData};
+use std::marker::PhantomData;
 
 use crate::{
     evm_circuit::util::constraint_builder::{BaseConstraintBuilder, ConstrainBuilderCommon},
@@ -34,7 +34,7 @@ use crate::{
     },
     util::{Challenges, SubCircuit, SubCircuitConfig},
     witness,
-    witness::{Bytecode, RwMap, Transaction},
+    witness::{BytecodeCollection, RwMap, Transaction},
 };
 
 /// The rw table shared between evm circuit and state circuit
@@ -678,7 +678,7 @@ pub struct ExternalData {
     /// StateCircuit -> rws
     pub rws: RwMap,
     /// BytecodeCircuit -> bytecodes
-    pub bytecodes: HashMap<Word, Bytecode>,
+    pub bytecodes: BytecodeCollection,
 }
 
 /// Copy Circuit

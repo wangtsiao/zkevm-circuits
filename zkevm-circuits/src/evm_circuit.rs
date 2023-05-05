@@ -423,7 +423,7 @@ impl<F: Field> Circuit<F> for EvmCircuit<F> {
         )?;
         config
             .bytecode_table
-            .load(&mut layouter, block.bytecodes.values(), &challenges)?;
+            .load(&mut layouter, block.bytecodes.clone(), &challenges)?;
         config
             .block_table
             .load(&mut layouter, &block.context, challenges.evm_word())?;

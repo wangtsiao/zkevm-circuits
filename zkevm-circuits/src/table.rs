@@ -7,7 +7,8 @@ use crate::{
     impl_expr,
     util::{build_tx_log_address, Challenges},
     witness::{
-        Block, BlockContext, Bytecode, MptUpdateRow, MptUpdates, Rw, RwMap, RwRow, Transaction,
+        Block, BlockContext, BytecodeCollection, MptUpdateRow, MptUpdates, Rw, RwMap, RwRow,
+        Transaction,
     },
 };
 use bus_mapping::{
@@ -724,7 +725,7 @@ impl BytecodeTable {
     pub fn load<'a, F: Field>(
         &self,
         layouter: &mut impl Layouter<F>,
-        bytecodes: impl IntoIterator<Item = &'a Bytecode> + Clone,
+        bytecodes: BytecodeCollection,
         challenges: &Challenges<Value<F>>,
     ) -> Result<(), Error> {
         layouter.assign_region(
@@ -743,7 +744,7 @@ impl BytecodeTable {
 
                 let bytecode_table_columns =
                     <BytecodeTable as LookupTable<F>>::advice_columns(self);
-                for bytecode in bytecodes.clone() {
+                for bytecode in bytecodes.clone().into_iter() {
                     for row in bytecode.table_assignments(challenges) {
                         for (&column, value) in bytecode_table_columns.iter().zip_eq(row) {
                             region.assign_advice(

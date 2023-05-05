@@ -61,6 +61,11 @@ impl Bytecode {
         self.code.iter().map(|b| b.value).collect()
     }
 
+    /// Geth the code size
+    pub fn codesize(self) -> usize {
+        self.code.len()
+    }
+
     /// Get the code hash
     pub fn hash(&self) -> Word {
         self.hash

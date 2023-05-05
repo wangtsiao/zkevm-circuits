@@ -69,7 +69,7 @@ impl<F: Field> Circuit<F> for CopyCircuit<F> {
 
         config.0.bytecode_table.load(
             &mut layouter,
-            self.external_data.bytecodes.values(),
+            self.external_data.bytecodes.clone(),
             &challenge_values,
         )?;
         self.synthesize_sub(&config.0, &challenge_values, &mut layouter)

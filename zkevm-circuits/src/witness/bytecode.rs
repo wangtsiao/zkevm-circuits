@@ -1,9 +1,74 @@
+use std::collections::HashMap;
+
+use bus_mapping::state_db::CodeDB;
 use eth_types::{Field, ToLittleEndian, Word};
 use halo2_proofs::circuit::Value;
 use itertools::Itertools;
 
 use crate::{evm_circuit::util::rlc, table::BytecodeFieldTag, util::Challenges};
 
+/// A collection of bytecode to prove
+#[derive(Clone, Debug, Default)]
+pub struct BytecodeCollection {
+    codes: HashMap<Word, BytecodeUnroller>,
+}
+
+impl BytecodeCollection {
+    /// Construct from codedb
+    pub fn from_codedb(code_db: &CodeDB) -> Self {
+        Self {
+            codes: code_db
+                .0
+                .values()
+                .map(|v| {
+                    let bytecode = BytecodeUnroller::from(v.clone());
+                    (bytecode.hash(), bytecode)
+                })
+                .collect(),
+        }
+    }
+
+    /// Construct from raw bytes
+    pub fn from_raw(bytecodes: Vec<Vec<u8>>) -> Self {
+        Self {
+            codes: HashMap::from_iter(bytecodes.iter().map(|bytecode| {
+                let code = BytecodeUnroller::from(bytecode.clone());
+                (code.hash(), code)
+            })),
+        }
+    }
+
+    /// Compute number of rows required for bytecode table.
+    pub fn num_rows_required_for_bytecode_table(&self) -> usize {
+        self.codes
+            .values()
+            .map(|bytecode| bytecode.table_len())
+            .sum()
+    }
+    /// Query code by hash
+    pub fn get(&self, codehash: &Word) -> Option<BytecodeUnroller> {
+        self.codes.get(codehash).cloned()
+    }
+
+    /// Get raw bytes
+    #[deprecated()]
+    pub fn to_raw(&self) -> Vec<Vec<u8>> {
+        self.codes.values().map(|code| code.code()).collect_vec()
+    }
+}
+
+impl IntoIterator for BytecodeCollection {
+    type Item = BytecodeUnroller;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.codes
+            .values()
+            .map(|x| x.clone())
+            .collect_vec()
+            .into_iter()
+    }
+}
 /// Bytecode
 #[derive(Clone, Debug)]
 pub struct BytecodeUnroller {
@@ -40,7 +105,7 @@ impl BytecodeUnroller {
     }
 
     /// The length of the bytecode
-    pub fn code_size(&self) -> usize {
+    pub fn codesize(&self) -> usize {
         self.b.code.len()
     }
 
@@ -93,7 +158,7 @@ impl IntoIterator for BytecodeUnroller {
             tag: BytecodeFieldTag::Header,
             index: 0,
             is_code: false,
-            value: self.code_size().try_into().unwrap(),
+            value: self.codesize().try_into().unwrap(),
         })
         .chain(
             self.b
