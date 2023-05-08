@@ -7,8 +7,8 @@ use crate::{
     impl_expr,
     util::{build_tx_log_address, Challenges},
     witness::{
-        Block, BlockContext, BytecodeCollection, MptUpdateRow, MptUpdates, Rw, RwMap, RwRow,
-        Transaction,
+        Block, BlockContext, Bytecode, BytecodeCollection, MptUpdateRow, MptUpdates, Rw, RwMap,
+        RwRow, Transaction,
     },
 };
 use bus_mapping::{
@@ -745,7 +745,16 @@ impl BytecodeTable {
                 let bytecode_table_columns =
                     <BytecodeTable as LookupTable<F>>::advice_columns(self);
                 for bytecode in bytecodes.clone().into_iter() {
-                    for row in bytecode.table_assignments(challenges) {
+                    let bytecode = Bytecode::from(&bytecode);
+                    for row in bytecode.clone().into_iter() {
+                        let code_hash = bytecode.get_code_hash(challenges);
+                        let row = [
+                            code_hash,
+                            Value::known(row.index),
+                            Value::known(row.tag),
+                            Value::known(row.is_code),
+                            Value::known(row.value),
+                        ];
                         for (&column, value) in bytecode_table_columns.iter().zip_eq(row) {
                             region.assign_advice(
                                 || format!("bytecode table row {}", offset),
