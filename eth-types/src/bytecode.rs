@@ -1,5 +1,5 @@
 //! EVM byte code generator
-use crate::{evm_types::OpcodeId, Bytes, ToWord, Word};
+use crate::{evm_types::OpcodeId, Bytes, Hash, ToBigEndian, ToWord, Word};
 use sha3::{Digest, Keccak256};
 use std::{collections::HashMap, str::FromStr};
 
@@ -12,18 +12,18 @@ pub enum Error {
 
 /// Helper struct that represents a single element in a bytecode.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct BytecodeElement {
+struct BytecodeElement {
     /// The byte value of the element.
-    pub value: u8,
+    value: u8,
     /// Whether the element is an opcode or push data byte.
-    pub is_code: bool,
+    is_code: bool,
 }
 
 /// EVM Bytecode
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Bytecode {
     /// Vector for bytecode elements.
-    pub code: Vec<BytecodeElement>,
+    code: Vec<BytecodeElement>,
     num_opcodes: usize,
     markers: HashMap<String, usize>,
     hash: Word,
@@ -31,11 +31,7 @@ pub struct Bytecode {
 
 impl From<Bytecode> for Bytes {
     fn from(code: Bytecode) -> Self {
-        code.code
-            .iter()
-            .map(|e| e.value)
-            .collect::<Vec<u8>>()
-            .into()
+        code.code().into()
     }
 }
 
@@ -61,8 +57,13 @@ impl Bytecode {
         self.code.iter().map(|b| b.value).collect()
     }
 
+    /// Get the code and is_code
+    pub fn code_vec(&self) -> Vec<(u8, bool)> {
+        self.code.iter().map(|b| (b.value, b.is_code)).collect()
+    }
+
     /// Geth the code size
-    pub fn codesize(self) -> usize {
+    pub fn codesize(&self) -> usize {
         self.code.len()
     }
 
@@ -71,14 +72,18 @@ impl Bytecode {
         self.hash
     }
 
-    /// Get the bytecode element at an index.
-    pub fn get(&self, index: usize) -> Option<BytecodeElement> {
-        self.code.get(index).cloned()
+    #[deprecated(note = "Word is preferred")]
+    /// Get the code hash
+    pub fn hash_h256(&self) -> Hash {
+        Hash::from_slice(&self.hash.to_be_bytes())
     }
 
-    /// Get the generated code
-    pub fn to_vec(&self) -> Vec<u8> {
-        self.code.iter().map(|e| e.value).collect()
+    /// Get the bytecode element at an index.
+    pub fn get(&self, index: usize) -> Option<(u8, bool)> {
+        self.code
+            .get(index)
+            .cloned()
+            .map(|elem| (elem.value, elem.is_code))
     }
 
     /// Append

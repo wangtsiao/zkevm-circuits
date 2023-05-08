@@ -102,19 +102,19 @@ impl BytecodeUnroller {
     #[deprecated()]
     /// get byte value and is_code pair
     pub fn get(&self, dest: usize) -> Option<(u8, bool)> {
-        self.b.code.get(dest).map(|b| (b.value, b.is_code))
+        self.b.get(dest)
     }
 
     #[deprecated()]
     /// The length of the bytecode
     pub fn codesize(&self) -> usize {
-        self.b.code.len()
+        self.b.codesize()
     }
 
     #[deprecated()]
     /// The length of the bytecode table
     pub fn table_len(&self) -> usize {
-        self.b.code.len() + 1
+        self.b.codesize() + 1
     }
 
     #[deprecated()]
@@ -183,15 +183,15 @@ impl IntoIterator for BytecodeUnroller {
         })
         .chain(
             self.b
-                .code
+                .code_vec()
                 .iter()
                 .enumerate()
-                .map(|(index, code)| Self::Item {
+                .map(|(index, &(byte, is_code))| Self::Item {
                     code_hash: self.hash(),
                     tag: BytecodeFieldTag::Byte,
                     index,
-                    is_code: code.is_code,
-                    value: code.value.into(),
+                    is_code,
+                    value: byte.into(),
                 }),
         )
         .collect_vec()

@@ -135,7 +135,7 @@ fn gen_copy_event(
     } else {
         Bytecode::default()
     };
-    let code_size = bytecode.code.len() as u64;
+    let code_size = bytecode.codesize() as u64;
 
     let dst_addr = dst_offset.as_u64();
     let src_addr_end = code_size;
