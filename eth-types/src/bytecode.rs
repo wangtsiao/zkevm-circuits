@@ -26,7 +26,6 @@ pub struct Bytecode {
     code: Vec<BytecodeElement>,
     num_opcodes: usize,
     markers: HashMap<String, usize>,
-    hash: Word,
 }
 
 impl From<Bytecode> for Bytes {
@@ -48,7 +47,6 @@ impl Bytecode {
                 .collect(),
             markers: HashMap::new(),
             num_opcodes: 0,
-            hash: Word::from_big_endian(Keccak256::digest(&input).as_slice()),
         }
     }
 
@@ -69,21 +67,18 @@ impl Bytecode {
 
     /// Get the code hash
     pub fn hash(&self) -> Word {
-        self.hash
+        Word::from_big_endian(Keccak256::digest(&self.code()).as_slice())
     }
 
     #[deprecated(note = "Word is preferred")]
     /// Get the code hash
     pub fn hash_h256(&self) -> Hash {
-        Hash::from_slice(&self.hash.to_be_bytes())
+        Hash::from_slice(&self.hash().to_be_bytes())
     }
 
     /// Get the bytecode element at an index.
     pub fn get(&self, index: usize) -> Option<(u8, bool)> {
-        self.code
-            .get(index)
-            .cloned()
-            .map(|elem| (elem.value, elem.is_code))
+        self.code.get(index).map(|elem| (elem.value, elem.is_code))
     }
 
     /// Append
