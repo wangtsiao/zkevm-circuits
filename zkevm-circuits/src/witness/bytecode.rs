@@ -145,11 +145,27 @@ impl From<Vec<u8>> for BytecodeUnroller {
 /// Public data for the bytecode
 #[derive(Clone, Debug, PartialEq)]
 pub struct BytecodeRow {
-    pub code_hash: Word,
-    pub tag: BytecodeFieldTag,
-    pub index: usize,
-    pub is_code: bool,
-    pub value: u64,
+    code_hash: Word,
+    tag: BytecodeFieldTag,
+    index: usize,
+    is_code: bool,
+    value: u64,
+}
+
+impl BytecodeRow {
+    pub fn tag<F: Field>(&self) -> F {
+        F::from(self.tag as u64)
+    }
+    pub fn index<F: Field>(&self) -> F {
+        F::from(self.index as u64)
+    }
+    pub fn is_code<F: Field>(&self) -> F {
+        F::from(self.is_code.into())
+    }
+
+    pub fn value<F: Field>(&self) -> F {
+        F::from(self.value)
+    }
 }
 
 impl IntoIterator for BytecodeUnroller {
