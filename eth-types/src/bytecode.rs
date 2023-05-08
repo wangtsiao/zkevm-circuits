@@ -166,16 +166,6 @@ impl Bytecode {
         self
     }
 
-    /// Generate the diassembly
-    pub fn disasm(&self) -> String {
-        let mut asm = String::new();
-        for op in self.iter() {
-            asm.push_str(&op.to_string());
-            asm.push('\n');
-        }
-        asm
-    }
-
     /// Append asm
     pub fn append_asm(&mut self, op: &str) -> Result<(), Error> {
         match OpcodeWithData::from_str(op)? {
@@ -567,25 +557,6 @@ mod tests {
             POP
             STOP
         };
-        assert_eq!(Bytecode::try_from(code.to_vec()).unwrap(), code);
-    }
-
-    #[test]
-    fn test_asm_disasm() {
-        let code = bytecode! {
-            PUSH1(5)
-            PUSH2(0xa)
-            MUL
-            STOP
-        };
-        let mut code2 = Bytecode::default();
-        code.iter()
-            .map(|op| op.to_string())
-            .map(|op| OpcodeWithData::from_str(&op).unwrap())
-            .for_each(|op| {
-                code2.append_op(op);
-            });
-
-        assert_eq!(code.code, code2.code);
+        assert_eq!(Bytecode::try_from(code.code()).unwrap(), code);
     }
 }
