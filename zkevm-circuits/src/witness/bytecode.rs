@@ -99,26 +99,31 @@ impl BytecodeUnroller {
             .collect_vec()
     }
 
+    #[deprecated()]
     /// get byte value and is_code pair
     pub fn get(&self, dest: usize) -> Option<(u8, bool)> {
         self.b.code.get(dest).map(|b| (b.value, b.is_code))
     }
 
+    #[deprecated()]
     /// The length of the bytecode
     pub fn codesize(&self) -> usize {
         self.b.code.len()
     }
 
+    #[deprecated()]
     /// The length of the bytecode table
     pub fn table_len(&self) -> usize {
         self.b.code.len() + 1
     }
 
+    #[deprecated()]
     /// The code hash
     pub fn hash(&self) -> Word {
         self.b.hash()
     }
 
+    #[deprecated()]
     /// The code in bytes
     pub fn code(&self) -> Vec<u8> {
         self.b.code()
