@@ -1,7 +1,7 @@
 use crate::{
     evm_circuit::{
         execution::ExecutionGadget,
-        param::N_BYTES_MEMORY_WORD_SIZE,
+        param::{N_BYTES_MEMORY_ADDRESS, N_BYTES_MEMORY_WORD_SIZE},
         step::ExecutionState,
         util::{
             common_gadget::SameContextGadget,
@@ -16,7 +16,7 @@ use crate::{
         witness::{Block, Call, ExecStep, Transaction},
     },
     util::{
-        word::{Word32Cell, WordExpr},
+        word::{WordCell, WordExpr},
         Expr,
     },
 };
@@ -27,7 +27,7 @@ use halo2_proofs::plonk::Error;
 pub(crate) struct MemoryGadget<F> {
     same_context: SameContextGadget<F>,
     address: MemoryAddress<F>,
-    value: Word32Cell<F>,
+    value: WordCell<F>,
     memory_expansion: MemoryExpansionGadget<F, 1, N_BYTES_MEMORY_WORD_SIZE>,
     is_mload: IsEqualGadget<F>,
     is_mstore8: IsEqualGadget<F>,
@@ -43,7 +43,7 @@ impl<F: Field> ExecutionGadget<F> for MemoryGadget<F> {
 
         // In successful case the address must be in 5 bytes
         let address = cb.query_memory_address();
-        let value = cb.query_word32();
+        let value = cb.query_word_unchecked();
 
         // Check if this is an MLOAD
         let is_mload = IsEqualGadget::construct(cb, opcode.expr(), OpcodeId::MLOAD.expr());
@@ -58,7 +58,7 @@ impl<F: Field> ExecutionGadget<F> for MemoryGadget<F> {
         // access
         let memory_expansion = MemoryExpansionGadget::construct(
             cb,
-            [address.to_word().lo() + 1.expr() + (is_not_mstore8.clone() * 31.expr())],
+            [address.expr() + 1.expr() + (is_not_mstore8.clone() * 31.expr())],
         );
 
         // Stack operations
@@ -73,19 +73,14 @@ impl<F: Field> ExecutionGadget<F> for MemoryGadget<F> {
         );
 
         cb.condition(is_mstore8.expr(), |cb| {
-            cb.memory_lookup(
-                1.expr(),
-                address.to_word().lo(),
-                value.limbs[0].expr(),
-                None,
-            );
+            cb.memory_lookup(1.expr(), address.expr(), value.limbs[0].expr(), None);
         });
 
         cb.condition(is_not_mstore8, |cb| {
             for idx in 0..32 {
                 cb.memory_lookup(
                     is_store.clone(),
-                    address.to_word().lo() + idx.expr(),
+                    address.expr() + idx.expr(),
                     value.limbs[31 - idx].expr(),
                     None,
                 );
@@ -135,8 +130,13 @@ impl<F: Field> ExecutionGadget<F> for MemoryGadget<F> {
         // Inputs/Outputs
         let [address, value] =
             [step.rw_indices[0], step.rw_indices[1]].map(|idx| block.rws[idx].stack_value());
-        self.address
-            .assign(region, offset, Some(address.to_le_bytes()))?;
+        self.address.assign(
+            region,
+            offset,
+            address.to_le_bytes()[0..N_BYTES_MEMORY_ADDRESS]
+                .try_into()
+                .ok(),
+        )?;
         self.value
             .assign(region, offset, Some(value.to_le_bytes()))?;
 

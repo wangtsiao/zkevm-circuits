@@ -10,17 +10,20 @@ use crate::{
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::{AccountFieldTag, CallContextFieldTag},
-    util::Expr,
+    util::{
+        word::{WordCell, WordExpr},
+        Expr,
+    },
 };
 use bus_mapping::evm::OpcodeId;
-use eth_types::{Field, ToScalar};
+use eth_types::{Field, ToLittleEndian, ToScalar};
 use halo2_proofs::{circuit::Value, plonk::Error};
 
 #[derive(Clone, Debug)]
 pub(crate) struct SelfbalanceGadget<F> {
     same_context: SameContextGadget<F>,
     callee_address: Cell<F>,
-    phase2_self_balance: Cell<F>,
+    self_balance: WordCell<F>,
 }
 
 impl<F: Field> ExecutionGadget<F> for SelfbalanceGadget<F> {
@@ -31,14 +34,14 @@ impl<F: Field> ExecutionGadget<F> for SelfbalanceGadget<F> {
     fn configure(cb: &mut EVMConstraintBuilder<F>) -> Self {
         let callee_address = cb.call_context(None, CallContextFieldTag::CalleeAddress);
 
-        let phase2_self_balance = cb.query_cell_phase2();
+        let self_balance = cb.query_word_unchecked();
         cb.account_read(
             callee_address.expr(),
             AccountFieldTag::Balance,
-            phase2_self_balance.expr(),
+            self_balance.to_word(),
         );
 
-        cb.stack_push(phase2_self_balance.expr());
+        cb.stack_push(self_balance.to_word());
 
         let opcode = cb.query_cell();
         let step_state_transition = StepStateTransition {
@@ -52,8 +55,8 @@ impl<F: Field> ExecutionGadget<F> for SelfbalanceGadget<F> {
 
         Self {
             same_context,
-            phase2_self_balance,
             callee_address,
+            self_balance,
         }
     }
 
@@ -79,8 +82,8 @@ impl<F: Field> ExecutionGadget<F> for SelfbalanceGadget<F> {
         )?;
 
         let self_balance = block.rws[step.rw_indices[2]].stack_value();
-        self.phase2_self_balance
-            .assign(region, offset, region.word_rlc(self_balance))?;
+        self.self_balance
+            .assign(region, offset, Some(self_balance.to_le_bytes()))?;
 
         Ok(())
     }

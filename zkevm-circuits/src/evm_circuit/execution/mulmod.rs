@@ -4,13 +4,19 @@ use crate::{
         step::ExecutionState,
         util::{
             common_gadget::SameContextGadget,
-            constraint_builder::{EVMConstraintBuilder, StepStateTransition, Transition::Delta},
-            math_gadget::{IsZeroGadget, LtWordGadget, ModGadget, MulAddWords512Gadget},
-            sum, CachedRegion,
+            constraint_builder::{
+                ConstrainBuilderCommon, EVMConstraintBuilder, StepStateTransition,
+                Transition::Delta,
+            },
+            math_gadget::{IsZeroWordGadget, LtWordGadget, ModGadget, MulAddWords512Gadget},
+            CachedRegion,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
-    util::{word::Word32Cell, Expr},
+    util::{
+        word::{Word, Word32Cell, WordExpr},
+        Expr,
+    },
 };
 use bus_mapping::evm::OpcodeId;
 use eth_types::{Field, ToLittleEndian, U256};
@@ -31,8 +37,8 @@ pub(crate) struct MulModGadget<F> {
     modword: ModGadget<F>,
     mul512_left: MulAddWords512Gadget<F>,
     mul512_right: MulAddWords512Gadget<F>,
-    n_is_zero: IsZeroGadget<F>,
-    lt: LtWordGadget<F>,
+    n_is_zero: IsZeroWordGadget<F, Word32Cell<F>>,
+    lt: LtWordGadget<F, Word32Cell<F>, Word32Cell<F>>,
 }
 
 impl<F: Field> ExecutionGadget<F> for MulModGadget<F> {
@@ -43,16 +49,16 @@ impl<F: Field> ExecutionGadget<F> for MulModGadget<F> {
     fn configure(cb: &mut EVMConstraintBuilder<F>) -> Self {
         let opcode = cb.query_cell();
 
-        let a = cb.query_word_rlc();
-        let b = cb.query_word_rlc();
-        let n = cb.query_word_rlc();
-        let r = cb.query_word_rlc();
+        let a = cb.query_word32();
+        let b = cb.query_word32();
+        let n = cb.query_word32();
+        let r = cb.query_word32();
 
-        let k = cb.query_word_rlc();
+        let k = cb.query_word32();
 
-        let a_reduced = cb.query_word_rlc();
-        let d = cb.query_word_rlc();
-        let e = cb.query_word_rlc();
+        let a_reduced = cb.query_word32();
+        let d = cb.query_word32();
+        let e = cb.query_word32();
 
         // 1.  k1 * n + a_reduced  == a
         let modword = ModGadget::construct(cb, [&a, &n, &a_reduced]);
@@ -64,17 +70,17 @@ impl<F: Field> ExecutionGadget<F> for MulModGadget<F> {
         let mul512_right = MulAddWords512Gadget::construct(cb, [&k, &n, &d, &e], Some(&r));
 
         // (r < n ) or n == 0
-        let n_is_zero = IsZeroGadget::construct(cb, sum::expr(&n.cells));
-        let lt = LtWordGadget::construct(cb, &r, &n);
+        let n_is_zero = IsZeroWordGadget::construct(cb, n);
+        let lt = LtWordGadget::construct(cb, r, n);
         cb.add_constraint(
             " (1 - (r < n) - (n==0)) ",
             1.expr() - lt.expr() - n_is_zero.expr(),
         );
 
-        cb.stack_pop(a.expr());
-        cb.stack_pop(b.expr());
-        cb.stack_pop(n.expr());
-        cb.stack_push(r.expr());
+        cb.stack_pop(a.to_word());
+        cb.stack_pop(b.to_word());
+        cb.stack_pop(n.to_word());
+        cb.stack_push(r.to_word());
 
         // State transition
         let step_state_transition = StepStateTransition {
@@ -154,8 +160,7 @@ impl<F: Field> ExecutionGadget<F> for MulModGadget<F> {
 
         self.lt.assign(region, offset, r, n)?;
 
-        let n_sum = (0..32).fold(0, |acc, idx| acc + n.byte(idx) as u64);
-        self.n_is_zero.assign(region, offset, F::from(n_sum))?;
+        self.n_is_zero.assign(region, offset, Word::from_u256(n))?;
         Ok(())
     }
 }

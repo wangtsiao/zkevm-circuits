@@ -1,17 +1,22 @@
-use crate::evm_circuit::{
-    execution::ExecutionGadget,
-    param::{N_BYTES_GAS, N_BYTES_U64},
-    step::ExecutionState,
-    util::{
-        and,
-        common_gadget::{CommonCallGadget, TransferGadget},
-        constraint_builder::{
-            ConstrainBuilderCommon, EVMConstraintBuilder, ReversionInfo, StepStateTransition,
-            Transition::{Delta, To},
+use crate::{
+    evm_circuit::{
+        execution::ExecutionGadget,
+        param::{N_BYTES_GAS, N_BYTES_U64},
+        step::ExecutionState,
+        util::{
+            and,
+            common_gadget::{CommonCallGadget, TransferGadget},
+            constraint_builder::{
+                ConstrainBuilderCommon, EVMConstraintBuilder, ReversionInfo, StepStateTransition,
+                Transition::{Delta, To},
+            },
+            math_gadget::{
+                ConstantDivisionGadget, IsZeroGadget, LtGadget, LtWordGadget, MinMaxGadget,
+            },
+            not, or, select, CachedRegion, Cell, Word,
         },
-        math_gadget::{ConstantDivisionGadget, IsZeroGadget, LtGadget, LtWordGadget, MinMaxGadget},
-        not, or, select, CachedRegion, Cell, Word,
     },
+    util::word::{WordCell, WordExpr},
 };
 
 use crate::{
@@ -49,7 +54,7 @@ pub(crate) struct CallOpGadget<F> {
     // current handling Call* opcode's caller balance
     caller_balance_word: Word<F>,
     // check if insufficient balance case
-    is_insufficient_balance: LtWordGadget<F>,
+    is_insufficient_balance: LtWordGadget<F, WordCell<F>, WordCell<F>>,
     is_depth_ok: LtGadget<F, N_BYTES_U64>,
     one_64th_gas: ConstantDivisionGadget<F, N_BYTES_GAS>,
     capped_callee_gas_left: MinMaxGadget<F, N_BYTES_GAS>,

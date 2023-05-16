@@ -16,11 +16,14 @@ use crate::{
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::CallContextFieldTag,
-    util::Expr,
+    util::{
+        word::{Word, WordCell, WordExpr},
+        Expr,
+    },
 };
 use eth_types::{
     evm_types::{GasCost, OpcodeId},
-    Field, ToScalar, U256,
+    Field, ToLittleEndian, ToScalar, U256,
 };
 use halo2_proofs::{circuit::Value, plonk::Error};
 
@@ -32,13 +35,13 @@ pub(crate) struct ErrorOOGSloadSstoreGadget<F> {
     tx_id: Cell<F>,
     is_static: Cell<F>,
     callee_address: Cell<F>,
-    phase2_key: Cell<F>,
-    phase2_value: Cell<F>,
-    phase2_value_prev: Cell<F>,
-    phase2_original_value: Cell<F>,
+    key: WordCell<F>,
+    value: WordCell<F>,
+    value_prev: WordCell<F>,
+    original_value: WordCell<F>,
     is_warm: Cell<F>,
     is_sstore: PairSelectGadget<F>,
-    sstore_gas_cost: SstoreGasGadget<F>,
+    sstore_gas_cost: SstoreGasGadget<F, WordCell<F>>,
     insufficient_gas_cost: LtGadget<F, N_BYTES_GAS>,
     // Constrain for SSTORE reentrancy sentry.
     insufficient_gas_sentry: LtGadget<F, N_BYTES_GAS>,
@@ -67,38 +70,38 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGSloadSstoreGadget<F> {
         // Constrain `is_static` must be false for SSTORE.
         cb.require_zero("is_static == false", is_static.expr() * is_sstore.expr().0);
 
-        let phase2_key = cb.query_cell_phase2();
-        let phase2_value = cb.query_cell_phase2();
-        let phase2_value_prev = cb.query_cell_phase2();
-        let phase2_original_value = cb.query_cell_phase2();
+        let key = cb.query_word_unchecked();
+        let value = cb.query_word_unchecked();
+        let value_prev = cb.query_word_unchecked();
+        let original_value = cb.query_word_unchecked();
         let is_warm = cb.query_bool();
 
-        cb.stack_pop(phase2_key.expr());
+        cb.stack_pop(key.to_word());
         cb.account_storage_access_list_read(
             tx_id.expr(),
             callee_address.expr(),
-            phase2_key.expr(),
-            is_warm.expr(),
+            key.to_word(),
+            Word::from_lo_unchecked(is_warm.expr()),
         );
 
         let sload_gas_cost = SloadGasGadget::construct(cb, is_warm.expr());
         let sstore_gas_cost = cb.condition(is_sstore.expr().0, |cb| {
-            cb.stack_pop(phase2_value.expr());
+            cb.stack_pop(value.to_word());
 
             cb.account_storage_read(
                 callee_address.expr(),
-                phase2_key.expr(),
-                phase2_value_prev.expr(),
+                key.to_word(),
+                value_prev.to_word(),
                 tx_id.expr(),
-                phase2_original_value.expr(),
+                original_value.to_word(),
             );
 
             SstoreGasGadget::construct(
                 cb,
-                phase2_value.clone(),
-                phase2_value_prev.clone(),
-                phase2_original_value.clone(),
                 is_warm.clone(),
+                value.clone(),
+                value_prev.clone(),
+                original_value.clone(),
             )
         });
 
@@ -137,10 +140,10 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGSloadSstoreGadget<F> {
             tx_id,
             is_static,
             callee_address,
-            phase2_key,
-            phase2_value,
-            phase2_value_prev,
-            phase2_original_value,
+            key,
+            value,
+            value_prev,
+            original_value,
             is_warm,
             is_sstore,
             sstore_gas_cost,
@@ -199,14 +202,13 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGSloadSstoreGadget<F> {
                     .expect("unexpected Address -> Scalar conversion failure"),
             ),
         )?;
-        self.phase2_key
-            .assign(region, offset, region.word_rlc(key))?;
-        self.phase2_value
-            .assign(region, offset, region.word_rlc(value))?;
-        self.phase2_value_prev
-            .assign(region, offset, region.word_rlc(value_prev))?;
-        self.phase2_original_value
-            .assign(region, offset, region.word_rlc(original_value))?;
+        self.key.assign(region, offset, Some(key.to_le_bytes()))?;
+        self.value
+            .assign(region, offset, Some(value.to_le_bytes()))?;
+        self.value_prev
+            .assign(region, offset, Some(value_prev.to_le_bytes()))?;
+        self.original_value
+            .assign(region, offset, Some(original_value.to_le_bytes()))?;
         self.is_warm
             .assign(region, offset, Value::known(F::from(is_warm as u64)))?;
 

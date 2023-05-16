@@ -8,12 +8,17 @@ use crate::{
                 ConstrainBuilderCommon, EVMConstraintBuilder, StepStateTransition,
                 Transition::Delta,
             },
-            math_gadget::{AbsWordGadget, IsZeroGadget, LtGadget, LtWordGadget, MulAddWordsGadget},
-            select, sum, CachedRegion,
+            math_gadget::{
+                AbsWordGadget, IsZeroWordGadget, LtGadget, LtWordGadget, MulAddWordsGadget,
+            },
+            CachedRegion,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
-    util::Expr,
+    util::{
+        word::{Word, Word32Cell, WordExpr},
+        Expr,
+    },
 };
 use bus_mapping::evm::OpcodeId;
 use eth_types::{Field, ToLittleEndian, U256};
@@ -27,11 +32,11 @@ pub(crate) struct SignedDivModGadget<F> {
     remainder_abs_word: AbsWordGadget<F>,
     dividend_abs_word: AbsWordGadget<F>,
     mul_add_words: MulAddWordsGadget<F>,
-    remainder_abs_lt_divisor_abs: LtWordGadget<F>,
+    remainder_abs_lt_divisor_abs: LtWordGadget<F, Word32Cell<F>, Word32Cell<F>>,
     dividend_is_signed_overflow: LtGadget<F, 1>,
-    quotient_is_zero: IsZeroGadget<F>,
-    divisor_is_zero: IsZeroGadget<F>,
-    remainder_is_zero: IsZeroGadget<F>,
+    quotient_is_zero: IsZeroWordGadget<F, Word32Cell<F>>,
+    divisor_is_zero: IsZeroWordGadget<F, Word32Cell<F>>,
+    remainder_is_zero: IsZeroWordGadget<F, Word32Cell<F>>,
 }
 
 impl<F: Field> ExecutionGadget<F> for SignedDivModGadget<F> {
@@ -47,17 +52,22 @@ impl<F: Field> ExecutionGadget<F> for SignedDivModGadget<F> {
         let divisor_abs_word = AbsWordGadget::construct(cb);
         let remainder_abs_word = AbsWordGadget::construct(cb);
         let dividend_abs_word = AbsWordGadget::construct(cb);
-        let quotient_is_zero = IsZeroGadget::construct(cb, sum::expr(&quotient_abs_word.x().cells));
-        let divisor_is_zero = IsZeroGadget::construct(cb, sum::expr(&divisor_abs_word.x().cells));
-        let remainder_is_zero =
-            IsZeroGadget::construct(cb, sum::expr(&remainder_abs_word.x().cells));
+        let quotient_is_zero = IsZeroWordGadget::construct(cb, quotient_abs_word.x().clone());
+        let divisor_is_zero = IsZeroWordGadget::construct(cb, divisor_abs_word.x().clone());
+        let remainder_is_zero = IsZeroWordGadget::construct(cb, remainder_abs_word.x().clone());
 
-        cb.stack_pop(dividend_abs_word.x().expr());
-        cb.stack_pop(divisor_abs_word.x().expr());
-        cb.stack_push(select::expr(
+        cb.stack_pop(dividend_abs_word.x().to_word());
+        cb.stack_pop(divisor_abs_word.x().to_word());
+        cb.stack_push(Word::select(
             is_sdiv,
-            quotient_abs_word.x().expr() * (1.expr() - divisor_is_zero.expr()),
-            remainder_abs_word.x().expr() * (1.expr() - divisor_is_zero.expr()),
+            quotient_abs_word
+                .x()
+                .to_word()
+                .mul_selector(1.expr() - divisor_is_zero.expr()),
+            remainder_abs_word
+                .x()
+                .to_word()
+                .mul_selector(1.expr() - divisor_is_zero.expr()),
         ));
 
         // Constrain `|quotient| * |divisor| + |remainder| = |dividend|`.
@@ -72,8 +82,11 @@ impl<F: Field> ExecutionGadget<F> for SignedDivModGadget<F> {
         );
         cb.add_constraint("overflow == 0", mul_add_words.overflow());
 
-        let remainder_abs_lt_divisor_abs =
-            LtWordGadget::construct(cb, remainder_abs_word.x_abs(), divisor_abs_word.x_abs());
+        let remainder_abs_lt_divisor_abs = LtWordGadget::construct(
+            cb,
+            remainder_abs_word.x_abs().clone(),
+            divisor_abs_word.x_abs().clone(),
+        );
         cb.add_constraint(
             "abs(remainder) < abs(divisor) when divisor != 0",
             (1.expr() - remainder_abs_lt_divisor_abs.expr()) * (1.expr() - divisor_is_zero.expr()),
@@ -96,7 +109,7 @@ impl<F: Field> ExecutionGadget<F> for SignedDivModGadget<F> {
         // `sign(dividend) == sign(divisor) ^ sign(quotient)` cannot be applied
         // for this case.
         let dividend_is_signed_overflow =
-            LtGadget::construct(cb, 127.expr(), dividend_abs_word.x_abs().cells[31].expr());
+            LtGadget::construct(cb, 127.expr(), dividend_abs_word.x_abs().limbs[31].expr());
 
         // Constrain sign(dividend) == sign(divisor) ^ sign(quotient) when both
         // quotient and divisor are non-zero and dividend is not signed overflow.
@@ -207,15 +220,12 @@ impl<F: Field> ExecutionGadget<F> for SignedDivModGadget<F> {
             127.into(),
             u64::from(dividend_abs.to_le_bytes()[31]).into(),
         )?;
-        let quotient_sum = (0..32).fold(0, |acc, idx| acc + quotient.byte(idx) as u64);
-        let divisor_sum = (0..32).fold(0, |acc, idx| acc + divisor.byte(idx) as u64);
-        let remainder_sum = (0..32).fold(0, |acc, idx| acc + remainder.byte(idx) as u64);
         self.quotient_is_zero
-            .assign(region, offset, F::from(quotient_sum))?;
+            .assign(region, offset, Word::from_u256(quotient))?;
         self.divisor_is_zero
-            .assign(region, offset, F::from(divisor_sum))?;
+            .assign(region, offset, Word::from_u256(divisor))?;
         self.remainder_is_zero
-            .assign(region, offset, F::from(remainder_sum))?;
+            .assign(region, offset, Word::from_u256(remainder))?;
         Ok(())
     }
 }

@@ -20,7 +20,10 @@ use crate::{
     table::{
         BlockContextFieldTag, CallContextFieldTag, RwTableTag, TxContextFieldTag, TxReceiptFieldTag,
     },
-    util::{word::Word, Expr},
+    util::{
+        word::{Word, WordExpr},
+        Expr,
+    },
 };
 use eth_types::{evm_types::MAX_REFUND_QUOTIENT_OF_GAS_USED, Field, ToScalar};
 use halo2_proofs::{circuit::Value, plonk::Error};
@@ -151,8 +154,7 @@ impl<F: Field> ExecutionGadget<F> for EndTxGadget<F> {
         cb.condition(
             cb.next.execution_state_selector([ExecutionState::BeginTx]),
             |cb| {
-                cb.call_context_lookup(
-                    true.expr(),
+                cb.call_context_lookup_write_unchecked(
                     Some(cb.next.state.rw_counter.expr()),
                     CallContextFieldTag::TxId,
                     // tx_id has been lookup and range_check above

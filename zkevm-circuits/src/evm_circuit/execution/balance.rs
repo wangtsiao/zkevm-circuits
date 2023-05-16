@@ -1,6 +1,7 @@
 use crate::{
     evm_circuit::{
         execution::ExecutionGadget,
+        param::N_BYTES_ACCOUNT_ADDRESS,
         step::ExecutionState,
         util::{
             common_gadget::SameContextGadget,
@@ -8,14 +9,14 @@ use crate::{
                 ConstrainBuilderCommon, EVMConstraintBuilder, ReversionInfo, StepStateTransition,
                 Transition::Delta,
             },
-            math_gadget::{IsZeroGadget, IsZeroWordGadget},
+            math_gadget::IsZeroWordGadget,
             not, select, AccountAddress, CachedRegion, Cell,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::{AccountFieldTag, CallContextFieldTag},
     util::{
-        word::{Word32Cell, WordExpr},
+        word::{Word, Word32Cell, WordExpr},
         Expr,
     },
 };
@@ -30,8 +31,8 @@ pub(crate) struct BalanceGadget<F> {
     tx_id: Cell<F>,
     is_warm: Cell<F>,
     code_hash: Word32Cell<F>,
-    not_exists: IsZeroGadget<F>,
-    balance: Cell<F>,
+    not_exists: IsZeroWordGadget<F, Word32Cell<F>>,
+    balance: Word32Cell<F>,
 }
 
 impl<F: Field> ExecutionGadget<F> for BalanceGadget<F> {
@@ -49,8 +50,8 @@ impl<F: Field> ExecutionGadget<F> for BalanceGadget<F> {
         cb.account_access_list_write(
             tx_id.expr(),
             address.expr(),
-            1.expr(),
-            is_warm.expr(),
+            Word::from_lo_unchecked(1.expr()),
+            Word::from_lo_unchecked(is_warm.expr()),
             Some(&mut reversion_info),
         );
         let code_hash = cb.query_word32();
@@ -60,7 +61,7 @@ impl<F: Field> ExecutionGadget<F> for BalanceGadget<F> {
             AccountFieldTag::CodeHash,
             code_hash.to_word(),
         );
-        let not_exists = IsZeroWordGadget::construct(cb, code_hash.to_word());
+        let not_exists = IsZeroWordGadget::construct(cb, code_hash);
         let exists = not::expr(not_exists.expr());
         let balance = cb.query_word32();
         cb.condition(exists.expr(), |cb| {
@@ -114,8 +115,13 @@ impl<F: Field> ExecutionGadget<F> for BalanceGadget<F> {
         self.same_context.assign_exec_step(region, offset, step)?;
 
         let address = block.rws[step.rw_indices[0]].stack_value();
-        self.address_word
-            .assign(region, offset, Some(address.to_le_bytes()))?;
+        self.address.assign(
+            region,
+            offset,
+            (address.to_le_bytes()[0..N_BYTES_ACCOUNT_ADDRESS])
+                .try_into()
+                .ok(),
+        )?;
 
         self.tx_id
             .assign(region, offset, Value::known(F::from(tx.id as u64)))?;
@@ -133,16 +139,16 @@ impl<F: Field> ExecutionGadget<F> for BalanceGadget<F> {
 
         let code_hash = block.rws[step.rw_indices[5]].account_value_pair().0;
         self.code_hash
-            .assign(region, offset, region.word_rlc(code_hash))?;
+            .assign(region, offset, Some(code_hash.to_le_bytes()))?;
         self.not_exists
-            .assign_value(region, offset, region.word_rlc(code_hash))?;
+            .assign_value(region, offset, Value::known(Word::from_u256(code_hash)))?;
         let balance = if code_hash.is_zero() {
             eth_types::Word::zero()
         } else {
             block.rws[step.rw_indices[6]].account_value_pair().0
         };
         self.balance
-            .assign(region, offset, region.word_rlc(balance))?;
+            .assign(region, offset, Some(balance.to_le_bytes()))?;
 
         Ok(())
     }

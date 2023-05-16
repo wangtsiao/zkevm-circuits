@@ -1,5 +1,5 @@
 use bus_mapping::{circuit_input_builder::CopyDataType, evm::OpcodeId};
-use eth_types::{evm_types::GasCost, Field, ToScalar, ToWord};
+use eth_types::{evm_types::GasCost, Field, ToLittleEndian, ToScalar, ToWord};
 use halo2_proofs::{circuit::Value, plonk::Error};
 
 use crate::{
@@ -12,11 +12,14 @@ use crate::{
                 ConstrainBuilderCommon, EVMConstraintBuilder, StepStateTransition, Transition,
             },
             memory_gadget::{MemoryAddressGadget, MemoryCopierGasGadget, MemoryExpansionGadget},
-            not, select, CachedRegion, Cell,
+            not, select, CachedRegion, Cell, RandomLinearCombination,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
-    util::Expr,
+    util::{
+        word::{Word, Word32Cell, WordExpr},
+        Expr,
+    },
 };
 
 use super::ExecutionGadget;
@@ -24,6 +27,8 @@ use super::ExecutionGadget;
 #[derive(Clone, Debug)]
 pub(crate) struct CodeCopyGadget<F> {
     same_context: SameContextGadget<F>,
+    /// code_hash for the code to copy
+    code_hash_word32: Word32Cell<F>,
     /// Holds the memory address for the offset in code from where we
     /// read. It is valid if within range of Uint64 and less than code_size.
     code_offset: WordByteCapGadget<F, N_BYTES_U64>,
@@ -53,23 +58,30 @@ impl<F: Field> ExecutionGadget<F> for CodeCopyGadget<F> {
 
         let code_size = cb.query_cell();
 
-        let size = cb.query_word_rlc();
-        let dst_memory_offset = cb.query_cell_phase2();
+        let code_hash_word32 = cb.query_word32();
+
+        let length = cb.query_memory_address();
+        let dst_memory_offset = cb.query_word_unchecked();
         let code_offset = WordByteCapGadget::construct(cb, code_size.expr());
 
         // Pop items from stack.
-        cb.stack_pop(dst_memory_offset.expr());
-        cb.stack_pop(code_offset.original_word());
-        cb.stack_pop(size.expr());
+        cb.stack_pop(dst_memory_offset.to_word());
+        cb.stack_pop(code_offset.original_word().to_word());
+        cb.stack_pop(Word::from_lo_unchecked(length.expr()));
 
         // Construct memory address in the destionation (memory) to which we copy code.
-        let dst_memory_addr = MemoryAddressGadget::construct(cb, dst_memory_offset, size);
+        let dst_memory_addr = MemoryAddressGadget::construct(cb, dst_memory_offset, length);
 
         // Fetch the hash of bytecode running in current environment.
         let code_hash = cb.curr.state.code_hash.clone();
+        cb.require_equal_word(
+            "codehash word2 == word32",
+            code_hash.to_word(),
+            code_hash_word32.to_word(),
+        );
 
         // Fetch the bytecode length from the bytecode table.
-        cb.bytecode_length(code_hash.expr(), code_size.expr());
+        cb.bytecode_length(code_hash.to_word(), code_size.expr());
 
         // Calculate the next memory size and the gas cost for this memory
         // access. This also accounts for the dynamic gas required to copy bytes to
@@ -91,7 +103,7 @@ impl<F: Field> ExecutionGadget<F> for CodeCopyGadget<F> {
             );
 
             cb.copy_table_lookup(
-                code_hash.expr(),
+                RandomLinearCombination::new(code_hash.limbs, cb.challenges().evm_word()).expr(),
                 CopyDataType::Bytecode.expr(),
                 cb.curr.state.call_id.expr(),
                 CopyDataType::Memory.expr(),
@@ -125,6 +137,7 @@ impl<F: Field> ExecutionGadget<F> for CodeCopyGadget<F> {
 
         Self {
             same_context,
+            code_hash_word32,
             code_offset,
             code_size,
             dst_memory_addr,
@@ -158,6 +171,9 @@ impl<F: Field> ExecutionGadget<F> for CodeCopyGadget<F> {
             .bytecodes
             .get(&call.code_hash.to_word())
             .expect("could not find current environment's bytecode");
+
+        self.code_hash_word32
+            .assign(region, offset, Some(call.code_hash.to_word().to_le_bytes()));
 
         let code_size = bytecode.bytes.len() as u64;
         self.code_size

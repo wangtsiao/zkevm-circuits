@@ -45,7 +45,7 @@ pub(crate) struct AddModGadget<F> {
     sum_areduced_b_overflow: Word32Cell<F>,
     muladd_d_n_r: MulAddWords512Gadget<F>,
 
-    n_is_zero: IsZeroWordGadget<F>,
+    n_is_zero: IsZeroWordGadget<F, Word32Cell<F>>,
     cmp_r_n: CmpWordsGadget<F, Word32Cell<F>, Word32Cell<F>>,
     cmp_areduced_n: CmpWordsGadget<F, Word32Cell<F>, Word32Cell<F>>,
 }
@@ -93,7 +93,7 @@ impl<F: Field> ExecutionGadget<F> for AddModGadget<F> {
         cb.require_equal_word(
             "check a_reduced + b 512 bit carry if n != 0",
             sum_areduced_b_overflow.to_word(),
-            Word::from_lo_unchecked(sum_areduced_b.carry())
+            Word::from_lo_unchecked(sum_areduced_b.carry().unwrap().expr())
                 .mul_selector(not::expr(n_is_zero.expr())),
         );
 

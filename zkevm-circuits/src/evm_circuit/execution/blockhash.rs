@@ -16,7 +16,10 @@ use crate::{
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::BlockContextFieldTag,
-    util::{word::WordCell, Expr},
+    util::{
+        word::{Word, WordCell, WordExpr},
+        Expr,
+    },
 };
 use bus_mapping::evm::OpcodeId;
 use eth_types::{Field, ToLittleEndian, ToScalar};
@@ -42,11 +45,11 @@ impl<F: Field> ExecutionGadget<F> for BlockHashGadget<F> {
         cb.block_lookup(
             BlockContextFieldTag::Number.expr(),
             None,
-            current_block_number.expr(),
+            Word::from_lo_unchecked(current_block_number.expr()),
         );
 
         let block_number = WordByteCapGadget::construct(cb, current_block_number.expr());
-        cb.stack_pop(block_number.original_word());
+        cb.stack_pop(block_number.original_word().to_word());
 
         let block_hash = cb.query_word_unchecked();
 
@@ -67,9 +70,9 @@ impl<F: Field> ExecutionGadget<F> for BlockHashGadget<F> {
         });
 
         cb.condition(not::expr(is_valid), |cb| {
-            cb.require_zero(
+            cb.require_zero_word(
                 "Invalid block number for block hash lookup",
-                block_hash.expr(),
+                block_hash.to_word(),
             );
         });
 

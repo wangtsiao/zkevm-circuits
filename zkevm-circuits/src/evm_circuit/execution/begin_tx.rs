@@ -63,8 +63,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         let call_id = cb.curr.state.rw_counter.clone();
 
         let tx_id = cb.query_cell();
-        cb.call_context_lookup(
-            1.expr(),
+        cb.call_context_lookup_write_unchecked(
             Some(call_id.expr()),
             CallContextFieldTag::TxId,
             tx_id.expr(),

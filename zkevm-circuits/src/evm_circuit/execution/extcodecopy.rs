@@ -8,13 +8,13 @@ use crate::{
                 ConstrainBuilderCommon, EVMConstraintBuilder, ReversionInfo, StepStateTransition,
                 Transition,
             },
-            from_bytes,
             memory_gadget::{MemoryAddressGadget, MemoryCopierGasGadget, MemoryExpansionGadget},
-            not, select, CachedRegion, Cell, Word,
+            not, select, AccountAddress, CachedRegion, Cell,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::{AccountFieldTag, CallContextFieldTag},
+    util::word::{Word, Word32Cell, WordExpr},
 };
 use bus_mapping::circuit_input_builder::CopyDataType;
 use eth_types::{evm_types::GasCost, Field, ToLittleEndian, ToScalar};
@@ -26,13 +26,13 @@ use super::ExecutionGadget;
 #[derive(Clone, Debug)]
 pub(crate) struct ExtcodecopyGadget<F> {
     same_context: SameContextGadget<F>,
-    external_address_word: Word<F>,
+    external_address_word: AccountAddress<F>,
     memory_address: MemoryAddressGadget<F>,
     code_offset: WordByteCapGadget<F, N_BYTES_U64>,
     tx_id: Cell<F>,
     reversion_info: ReversionInfo<F>,
     is_warm: Cell<F>,
-    code_hash: Cell<F>,
+    code_hash: Word32Cell<F>,
     code_size: Cell<F>,
     copy_rwc_inc: Cell<F>,
     memory_expansion: MemoryExpansionGadget<F, 1, N_BYTES_MEMORY_WORD_SIZE>,
@@ -47,20 +47,18 @@ impl<F: Field> ExecutionGadget<F> for ExtcodecopyGadget<F> {
     fn configure(cb: &mut EVMConstraintBuilder<F>) -> Self {
         let opcode = cb.query_cell();
 
-        let external_address_word = cb.query_word_rlc();
-        let external_address =
-            from_bytes::expr(&external_address_word.cells[..N_BYTES_ACCOUNT_ADDRESS]);
+        let external_address = cb.query_account_address();
 
         let code_size = cb.query_cell();
 
-        let memory_length = cb.query_word_rlc();
-        let memory_offset = cb.query_cell_phase2();
+        let memory_length = cb.query_memory_address();
+        let memory_offset = cb.query_word_unchecked();
         let code_offset = WordByteCapGadget::construct(cb, code_size.expr());
 
-        cb.stack_pop(external_address_word.expr());
-        cb.stack_pop(memory_offset.expr());
-        cb.stack_pop(code_offset.original_word());
-        cb.stack_pop(memory_length.expr());
+        cb.stack_pop(external_address.to_word());
+        cb.stack_pop(memory_offset.to_word());
+        cb.stack_pop(code_offset.original_word().to_word());
+        cb.stack_pop(memory_length.to_word());
 
         let tx_id = cb.call_context(None, CallContextFieldTag::TxId);
         let mut reversion_info = cb.reversion_info_read(None);
@@ -68,22 +66,22 @@ impl<F: Field> ExecutionGadget<F> for ExtcodecopyGadget<F> {
         cb.account_access_list_write(
             tx_id.expr(),
             external_address.expr(),
-            1.expr(),
-            is_warm.expr(),
+            Word::from_lo_unchecked(1.expr()),
+            Word::from_lo_unchecked(is_warm.expr()),
             Some(&mut reversion_info),
         );
 
-        let code_hash = cb.query_cell_phase2();
+        let code_hash = cb.query_word32();
         cb.account_read(
             external_address.expr(),
             AccountFieldTag::CodeHash,
-            code_hash.expr(),
+            code_hash.to_word(),
         );
         // TODO: If external_address doesn't exist, we will get code_hash = 0.  With
         // this value, the bytecode_length lookup will not work, and the copy
         // from code_hash = 0 will not work. We should use EMPTY_HASH when
         // code_hash = 0.
-        cb.bytecode_length(code_hash.expr(), code_size.expr());
+        cb.bytecode_length(code_hash.to_word(), code_size.expr());
 
         let memory_address = MemoryAddressGadget::construct(cb, memory_offset, memory_length);
         let memory_expansion = MemoryExpansionGadget::construct(cb, [memory_address.address()]);
@@ -109,7 +107,7 @@ impl<F: Field> ExecutionGadget<F> for ExtcodecopyGadget<F> {
             );
 
             cb.copy_table_lookup(
-                code_hash.expr(),
+                cb.word_rlc(code_hash.word_expr().limbs),
                 CopyDataType::Bytecode.expr(),
                 cb.curr.state.call_id.expr(),
                 CopyDataType::Memory.expr(),
@@ -141,7 +139,7 @@ impl<F: Field> ExecutionGadget<F> for ExtcodecopyGadget<F> {
 
         Self {
             same_context,
-            external_address_word,
+            external_address_word: external_address,
             memory_address,
             code_offset,
             tx_id,
@@ -168,8 +166,13 @@ impl<F: Field> ExecutionGadget<F> for ExtcodecopyGadget<F> {
 
         let [external_address, memory_offset, code_offset, memory_length] =
             [0, 1, 2, 3].map(|idx| block.rws[step.rw_indices[idx]].stack_value());
-        self.external_address_word
-            .assign(region, offset, Some(external_address.to_le_bytes()))?;
+        self.external_address_word.assign(
+            region,
+            offset,
+            external_address.to_le_bytes()[0..N_BYTES_ACCOUNT_ADDRESS]
+                .try_into()
+                .ok(),
+        )?;
         let memory_address =
             self.memory_address
                 .assign(region, offset, memory_offset, memory_length)?;
@@ -189,7 +192,7 @@ impl<F: Field> ExecutionGadget<F> for ExtcodecopyGadget<F> {
 
         let code_hash = block.rws[step.rw_indices[8]].account_value_pair().0;
         self.code_hash
-            .assign(region, offset, region.word_rlc(code_hash))?;
+            .assign(region, offset, Some(code_hash.to_le_bytes()))?;
 
         let code_size = if code_hash.is_zero() {
             0

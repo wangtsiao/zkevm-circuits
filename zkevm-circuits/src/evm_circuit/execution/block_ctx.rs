@@ -1,17 +1,20 @@
 use crate::{
     evm_circuit::{
         execution::ExecutionGadget,
-        param::{N_BYTES_ACCOUNT_ADDRESS, N_BYTES_U64, N_BYTES_WORD},
+        param::{N_BYTES_ACCOUNT_ADDRESS, N_BYTES_HALF_WORD, N_BYTES_U64, N_BYTES_WORD},
         step::ExecutionState,
         util::{
             common_gadget::SameContextGadget,
             constraint_builder::{EVMConstraintBuilder, StepStateTransition, Transition::Delta},
-            from_bytes, CachedRegion, RandomLinearCombination,
+            CachedRegion,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::BlockContextFieldTag,
-    util::Expr,
+    util::{
+        word::{WordCell, WordExpr},
+        Expr,
+    },
 };
 use bus_mapping::evm::OpcodeId;
 use eth_types::{Field, ToLittleEndian};
@@ -20,15 +23,15 @@ use halo2_proofs::plonk::Error;
 #[derive(Clone, Debug)]
 pub(crate) struct BlockCtxGadget<F, const N_BYTES: usize> {
     same_context: SameContextGadget<F>,
-    value: RandomLinearCombination<F, N_BYTES>,
+    value: WordCell<F>,
 }
 
 impl<F: Field, const N_BYTES: usize> BlockCtxGadget<F, N_BYTES> {
     fn construct(cb: &mut EVMConstraintBuilder<F>) -> Self {
-        let value = cb.query_word_rlc();
+        let value = cb.query_word_unchecked(); // block lookup below
 
         // Push the const generic parameter N_BYTES value to the stack
-        cb.stack_push(value.expr());
+        cb.stack_push(value.to_word());
 
         // Get op's FieldTag
         let opcode = cb.query_cell();
@@ -37,12 +40,7 @@ impl<F: Field, const N_BYTES: usize> BlockCtxGadget<F, N_BYTES> {
 
         // Lookup block table with block context ops
         // TIMESTAMP/NUMBER/GASLIMIT, COINBASE and DIFFICULTY/BASEFEE
-        let value_expr = if N_BYTES == N_BYTES_WORD {
-            value.expr()
-        } else {
-            from_bytes::expr(&value.cells)
-        };
-        cb.block_lookup(blockctx_tag, None, value_expr);
+        cb.block_lookup(blockctx_tag, None, value.to_word());
 
         // State transition
         let step_state_transition = StepStateTransition {
@@ -133,14 +131,11 @@ impl<F: Field> ExecutionGadget<F> for BlockCtxU160Gadget<F> {
 
         let value = block.rws[step.rw_indices[0]].stack_value();
 
-        self.value_u160.value.assign(
+        self.value_u160.value.assign_lo_hi(
             region,
             offset,
-            Some(
-                value.to_le_bytes()[..N_BYTES_ACCOUNT_ADDRESS]
-                    .try_into()
-                    .unwrap(),
-            ),
+            value.to_le_bytes()[..N_BYTES_HALF_WORD].try_into().ok(),
+            value.to_le_bytes()[N_BYTES_HALF_WORD..].try_into().ok(),
         )?;
 
         Ok(())

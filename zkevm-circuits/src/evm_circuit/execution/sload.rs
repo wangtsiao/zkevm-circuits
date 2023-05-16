@@ -12,9 +12,12 @@ use crate::{
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::CallContextFieldTag,
-    util::Expr,
+    util::{
+        word::{Word, WordCell, WordExpr},
+        Expr,
+    },
 };
-use eth_types::{Field, ToScalar};
+use eth_types::{Field, ToLittleEndian, ToScalar};
 use halo2_proofs::{circuit::Value, plonk::Error};
 
 #[derive(Clone, Debug)]
@@ -23,9 +26,9 @@ pub(crate) struct SloadGadget<F> {
     tx_id: Cell<F>,
     reversion_info: ReversionInfo<F>,
     callee_address: Cell<F>,
-    phase2_key: Cell<F>,
-    phase2_value: Cell<F>,
-    phase2_committed_value: Cell<F>,
+    key: WordCell<F>,
+    value: WordCell<F>,
+    committed_value: WordCell<F>,
     is_warm: Cell<F>,
 }
 
@@ -41,29 +44,29 @@ impl<F: Field> ExecutionGadget<F> for SloadGadget<F> {
         let mut reversion_info = cb.reversion_info_read(None);
         let callee_address = cb.call_context(None, CallContextFieldTag::CalleeAddress);
 
-        let phase2_key = cb.query_cell_phase2();
+        let key = cb.query_word_unchecked();
         // Pop the key from the stack
-        cb.stack_pop(phase2_key.expr());
+        cb.stack_pop(key.to_word());
 
-        let phase2_value = cb.query_cell_phase2();
-        let phase2_committed_value = cb.query_cell_phase2();
+        let value = cb.query_word_unchecked();
+        let committed_value = cb.query_word_unchecked();
         cb.account_storage_read(
             callee_address.expr(),
-            phase2_key.expr(),
-            phase2_value.expr(),
+            key.to_word(),
+            value.to_word(),
             tx_id.expr(),
-            phase2_committed_value.expr(),
+            committed_value.to_word(),
         );
 
-        cb.stack_push(phase2_value.expr());
+        cb.stack_push(value.to_word());
 
         let is_warm = cb.query_bool();
         cb.account_storage_access_list_write(
             tx_id.expr(),
             callee_address.expr(),
-            phase2_key.expr(),
-            true.expr(),
-            is_warm.expr(),
+            key.to_word(),
+            Word::from_lo_unchecked(true.expr()),
+            Word::from_lo_unchecked(is_warm.expr()),
             Some(&mut reversion_info),
         );
 
@@ -82,9 +85,9 @@ impl<F: Field> ExecutionGadget<F> for SloadGadget<F> {
             tx_id,
             reversion_info,
             callee_address,
-            phase2_key,
-            phase2_value,
-            phase2_committed_value,
+            key,
+            value,
+            committed_value,
             is_warm,
         }
     }
@@ -120,14 +123,13 @@ impl<F: Field> ExecutionGadget<F> for SloadGadget<F> {
 
         let [key, value] =
             [step.rw_indices[4], step.rw_indices[6]].map(|idx| block.rws[idx].stack_value());
-        self.phase2_key
-            .assign(region, offset, region.word_rlc(key))?;
-        self.phase2_value
-            .assign(region, offset, region.word_rlc(value))?;
+        self.key.assign(region, offset, Some(key.to_le_bytes()))?;
+        self.value
+            .assign(region, offset, Some(value.to_le_bytes()))?;
 
         let (_, committed_value) = block.rws[step.rw_indices[5]].aux_pair();
-        self.phase2_committed_value
-            .assign(region, offset, region.word_rlc(committed_value))?;
+        self.committed_value
+            .assign(region, offset, Some(committed_value.to_le_bytes()))?;
 
         let (_, is_warm) = block.rws[step.rw_indices[7]].tx_access_list_value_pair();
         self.is_warm

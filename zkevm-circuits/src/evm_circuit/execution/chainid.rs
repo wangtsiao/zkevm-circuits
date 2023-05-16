@@ -5,21 +5,24 @@ use crate::{
         util::{
             common_gadget::SameContextGadget,
             constraint_builder::{EVMConstraintBuilder, StepStateTransition, Transition::Delta},
-            CachedRegion, Cell,
+            CachedRegion,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::BlockContextFieldTag,
-    util::Expr,
+    util::{
+        word::{WordCell, WordExpr},
+        Expr,
+    },
 };
 use bus_mapping::evm::OpcodeId;
-use eth_types::Field;
+use eth_types::{Field, ToLittleEndian};
 use halo2_proofs::plonk::Error;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ChainIdGadget<F> {
     same_context: SameContextGadget<F>,
-    chain_id: Cell<F>,
+    chain_id: WordCell<F>,
 }
 
 impl<F: Field> ExecutionGadget<F> for ChainIdGadget<F> {
@@ -28,13 +31,17 @@ impl<F: Field> ExecutionGadget<F> for ChainIdGadget<F> {
     const EXECUTION_STATE: ExecutionState = ExecutionState::CHAINID;
 
     fn configure(cb: &mut EVMConstraintBuilder<F>) -> Self {
-        let chain_id = cb.query_cell_phase2();
+        let chain_id = cb.query_word_unchecked();
 
         // Push the value to the stack
-        cb.stack_push(chain_id.expr());
+        cb.stack_push(chain_id.to_word());
 
         // Lookup block table with chain_id
-        cb.block_lookup(BlockContextFieldTag::ChainId.expr(), None, chain_id.expr());
+        cb.block_lookup(
+            BlockContextFieldTag::ChainId.expr(),
+            None,
+            chain_id.to_word(),
+        );
 
         // State transition
         let opcode = cb.query_cell();
@@ -66,7 +73,7 @@ impl<F: Field> ExecutionGadget<F> for ChainIdGadget<F> {
         let chain_id = block.rws[step.rw_indices[0]].stack_value();
 
         self.chain_id
-            .assign(region, offset, region.word_rlc(chain_id))?;
+            .assign(region, offset, Some(chain_id.to_le_bytes()))?;
         Ok(())
     }
 }

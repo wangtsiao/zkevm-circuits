@@ -8,12 +8,15 @@ use crate::{
             constraint_builder::{
                 EVMConstraintBuilder, ReversionInfo, StepStateTransition, Transition::Delta,
             },
-            from_bytes, select, CachedRegion, Cell, Word,
+            select, AccountAddress, CachedRegion, Cell,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::{AccountFieldTag, CallContextFieldTag},
-    util::Expr,
+    util::{
+        word::{Word, WordCell, WordExpr},
+        Expr,
+    },
 };
 use eth_types::{evm_types::GasCost, Field, ToLittleEndian};
 use halo2_proofs::{circuit::Value, plonk::Error};
@@ -21,11 +24,11 @@ use halo2_proofs::{circuit::Value, plonk::Error};
 #[derive(Clone, Debug)]
 pub(crate) struct ExtcodehashGadget<F> {
     same_context: SameContextGadget<F>,
-    address_word: Word<F>,
+    address: AccountAddress<F>,
     tx_id: Cell<F>,
     reversion_info: ReversionInfo<F>,
     is_warm: Cell<F>,
-    code_hash: Cell<F>,
+    code_hash: WordCell<F>,
 }
 
 impl<F: Field> ExecutionGadget<F> for ExtcodehashGadget<F> {
@@ -34,9 +37,8 @@ impl<F: Field> ExecutionGadget<F> for ExtcodehashGadget<F> {
     const EXECUTION_STATE: ExecutionState = ExecutionState::EXTCODEHASH;
 
     fn configure(cb: &mut EVMConstraintBuilder<F>) -> Self {
-        let address_word = cb.query_word_rlc();
-        let address = from_bytes::expr(&address_word.cells[..N_BYTES_ACCOUNT_ADDRESS]);
-        cb.stack_pop(address_word.expr());
+        let address = cb.query_account_address();
+        cb.stack_pop(address.to_word());
 
         let tx_id = cb.call_context(None, CallContextFieldTag::TxId);
         let mut reversion_info = cb.reversion_info_read(None);
@@ -45,15 +47,20 @@ impl<F: Field> ExecutionGadget<F> for ExtcodehashGadget<F> {
         cb.account_access_list_write(
             tx_id.expr(),
             address.expr(),
-            1.expr(),
-            is_warm.expr(),
+            Word::from_lo_unchecked(1.expr()),
+            Word::from_lo_unchecked(is_warm.expr()),
             Some(&mut reversion_info),
         );
 
-        let code_hash = cb.query_cell_phase2();
+        // range check will be cover by account code_hash lookup
+        let code_hash = cb.query_word_unchecked();
         // For non-existing accounts the code_hash must be 0 in the rw_table.
-        cb.account_read(address, AccountFieldTag::CodeHash, code_hash.expr());
-        cb.stack_push(code_hash.expr());
+        cb.account_read(
+            address.expr(),
+            AccountFieldTag::CodeHash,
+            code_hash.to_word(),
+        );
+        cb.stack_push(code_hash.to_word());
 
         let gas_cost = select::expr(
             is_warm.expr(),
@@ -74,7 +81,7 @@ impl<F: Field> ExecutionGadget<F> for ExtcodehashGadget<F> {
 
         Self {
             same_context,
-            address_word,
+            address,
             tx_id,
             reversion_info,
             is_warm,
@@ -94,8 +101,13 @@ impl<F: Field> ExecutionGadget<F> for ExtcodehashGadget<F> {
         self.same_context.assign_exec_step(region, offset, step)?;
 
         let address = block.rws[step.rw_indices[0]].stack_value();
-        self.address_word
-            .assign(region, offset, Some(address.to_le_bytes()))?;
+        self.address.assign(
+            region,
+            offset,
+            address.to_le_bytes()[0..N_BYTES_ACCOUNT_ADDRESS]
+                .try_into()
+                .ok(),
+        )?;
 
         self.tx_id
             .assign(region, offset, Value::known(F::from(tx.id as u64)))?;
@@ -112,7 +124,7 @@ impl<F: Field> ExecutionGadget<F> for ExtcodehashGadget<F> {
 
         let code_hash = block.rws[step.rw_indices[5]].account_value_pair().0;
         self.code_hash
-            .assign(region, offset, region.word_rlc(code_hash))?;
+            .assign(region, offset, Some(code_hash.to_le_bytes()))?;
 
         Ok(())
     }

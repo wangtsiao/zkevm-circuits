@@ -11,7 +11,7 @@ use crate::{
         },
     },
     table::CallContextFieldTag,
-    util::{word::WordExpr, Expr},
+    util::{word::Word, Expr},
     witness::{Block, Call, ExecStep, Transaction},
 };
 use bus_mapping::evm::OpcodeId;
@@ -67,7 +67,7 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGCallGadget<F> {
         cb.account_access_list_read(
             tx_id.expr(),
             call_gadget.callee_address_expr(),
-            is_warm.expr(),
+            Word::from_lo_unchecked(is_warm.expr()),
         );
 
         cb.condition(call_gadget.has_value.expr(), |cb| {
@@ -164,7 +164,7 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGCallGadget<F> {
             rd_offset,
             rd_length,
             step.memory_word_size(),
-            region.word_rlc(callee_code_hash),
+            callee_code_hash,
         )?;
 
         self.opcode

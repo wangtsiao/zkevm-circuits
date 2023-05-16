@@ -15,7 +15,11 @@ use crate::{
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::{CallContextFieldTag, RwTableTag, TxLogFieldTag},
-    util::{build_tx_log_expression, word::Word, Expr},
+    util::{
+        build_tx_log_expression,
+        word::{Word, WordExpr},
+        Expr,
+    },
 };
 use array_init::array_init;
 use bus_mapping::circuit_input_builder::CopyDataType;
@@ -47,8 +51,8 @@ impl<F: Field> ExecutionGadget<F> for LogGadget<F> {
     const EXECUTION_STATE: ExecutionState = ExecutionState::LOG;
 
     fn configure(cb: &mut EVMConstraintBuilder<F>) -> Self {
-        let mstart = cb.query_word32();
-        let msize = cb.query_word32();
+        let mstart = cb.query_word_unchecked();
+        let msize = cb.query_memory_address();
 
         // Pop mstart_address, msize from stack
         cb.stack_pop(mstart.to_word());
