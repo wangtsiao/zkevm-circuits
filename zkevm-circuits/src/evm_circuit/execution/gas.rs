@@ -146,8 +146,8 @@ mod test {
                 // wrong `gas_left` value for the second step, to assert that
                 // the circuit verification fails for this scenario.
                 assert_eq!(block.txs.len(), 1);
-                assert_eq!(block.txs[0].steps.len(), 4);
-                block.txs[0].steps[2].gas_left.0 -= 1;
+                assert_eq!(block.txs[0].steps().len(), 4);
+                block.txs[0].steps_mut()[2].gas_left.0 -= 1;
             }))
             .evm_checks(Box::new(|prover, gate_rows, lookup_rows| {
                 assert!(prover
