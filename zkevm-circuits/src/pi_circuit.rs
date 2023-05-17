@@ -80,7 +80,7 @@ pub struct PublicData {
     /// where the latest one is at history_hashes[history_hashes.len() - 1].
     pub history_hashes: Vec<Word>,
     /// Block Transactions
-    pub transactions: Vec<eth_types::Transaction>,
+    pub transactions: Vec<Transaction>,
     /// Block State Root
     pub state_root: H256,
     /// Previous block root
@@ -164,7 +164,7 @@ impl PublicData {
     }
 
     fn txs(&self) -> Vec<Transaction> {
-        self.transactions.iter().map(Transaction::from).collect()
+        self.transactions
     }
 }
 
@@ -1147,8 +1147,8 @@ impl<F: Field> SubCircuit<F> for PiCircuit<F> {
         let public_data = PublicData {
             chain_id: block.context.chain_id,
             history_hashes: block.context.history_hashes.clone(),
-            transactions: block.eth_block.transactions.clone(),
-            state_root: block.eth_block.state_root,
+            transactions: block.txs.clone(),
+            state_root: block.state_root.into(),
             prev_state_root: H256::from_uint(&block.prev_state_root),
             block_constants: BlockConstants {
                 coinbase: block.context.coinbase,
