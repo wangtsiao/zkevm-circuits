@@ -80,19 +80,17 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
 
         let tx_id = cb.call_context(None, CallContextFieldTag::TxId);
         let mut reversion_info = cb.reversion_info_read(None);
-        let [is_static, depth, current_callee_address] = [
-            CallContextFieldTag::IsStatic,
-            CallContextFieldTag::Depth,
-            CallContextFieldTag::CalleeAddress,
-        ]
-        .map(|field_tag| cb.call_context(None, field_tag));
+        let [is_static, depth] = [CallContextFieldTag::IsStatic, CallContextFieldTag::Depth]
+            .map(|field_tag| cb.call_context(None, field_tag));
 
-        let (current_caller_address, current_value) = cb.condition(is_delegatecall.expr(), |cb| {
-            (
-                cb.call_context(None, CallContextFieldTag::CallerAddress),
-                cb.call_context_read_as_word(None, CallContextFieldTag::Value),
-            )
-        });
+        let (current_caller_address, current_callee_address, current_value) =
+            cb.condition(is_delegatecall.expr(), |cb| {
+                (
+                    cb.call_context_read_as_word(None, CallContextFieldTag::CallerAddress),
+                    cb.call_context_read_as_word(None, CallContextFieldTag::CalleeAddress),
+                    cb.call_context_read_as_word(None, CallContextFieldTag::Value),
+                )
+            });
 
         let call_gadget = CommonCallGadget::construct(
             cb,
@@ -102,21 +100,21 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
             is_staticcall.expr(),
         );
         cb.condition(not::expr(is_call.expr() + is_callcode.expr()), |cb| {
-            cb.require_zero(
+            cb.require_zero_word(
                 "for non call/call code, value is zero",
-                call_gadget.value.expr(),
+                call_gadget.value.to_word(),
             );
         });
 
-        let caller_address = select::expr(
+        let caller_address = Word::select(
             is_delegatecall.expr(),
-            current_caller_address.expr(),
-            current_callee_address.expr(),
+            current_caller_address.to_word(),
+            current_callee_address.to_word(),
         );
-        let callee_address = select::expr(
+        let callee_address = Word::select(
             is_callcode.expr() + is_delegatecall.expr(),
-            current_callee_address.expr(),
-            call_gadget.callee_address_expr(),
+            current_callee_address.to_word(),
+            call_gadget.callee_address_word(),
         );
 
         // Add callee to access list
@@ -125,8 +123,8 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
         cb.account_access_list_write(
             tx_id.expr(),
             call_gadget.callee_address_expr(),
-            is_warm.expr(),
-            is_warm_prev.expr(),
+            Word::from_lo_unchecked(is_warm.expr()),
+            Word::from_lo_unchecked(is_warm_prev.expr()),
             Some(&mut reversion_info),
         );
 
@@ -152,14 +150,14 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
             );
         });
 
-        let caller_balance_word = cb.query_word_rlc();
+        let caller_balance_word = cb.query_word_unchecked();
         cb.account_read(
             caller_address.expr(),
             AccountFieldTag::Balance,
-            caller_balance_word.expr(),
+            caller_balance_word.to_word(),
         );
         let is_insufficient_balance =
-            LtWordGadget::construct(cb, &caller_balance_word, &call_gadget.value);
+            LtWordGadget::construct(cb, caller_balance_word, call_gadget.value);
         // depth < 1025
         let is_depth_ok = LtGadget::construct(cb, depth.expr(), 1025.expr());
 
@@ -236,7 +234,7 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
                     CallContextFieldTag::LastCalleeReturnDataOffset,
                     CallContextFieldTag::LastCalleeReturnDataLength,
                 ] {
-                    cb.call_context_lookup(true.expr(), None, field_tag, 0.expr());
+                    cb.call_context_lookup_write_unchecked(None, field_tag, Word::zero());
                 }
 
                 // For CALL opcode, it has an extra stack pop `value` (+1) and if the value is
@@ -281,7 +279,7 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
                 CallContextFieldTag::LastCalleeReturnDataOffset,
                 CallContextFieldTag::LastCalleeReturnDataLength,
             ] {
-                cb.call_context_lookup(true.expr(), None, field_tag, 0.expr());
+                cb.call_context_lookup_write_unchecked(None, field_tag, Word::zero());
             }
 
             cb.require_step_state_transition(StepStateTransition {
