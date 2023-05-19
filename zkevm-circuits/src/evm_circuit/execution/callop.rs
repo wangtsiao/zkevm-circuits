@@ -13,10 +13,10 @@ use crate::{
             math_gadget::{
                 ConstantDivisionGadget, IsZeroGadget, LtGadget, LtWordGadget, MinMaxGadget,
             },
-            not, or, select, CachedRegion, Cell, Word,
+            not, or, select, CachedRegion, Cell,
         },
     },
-    util::word::{WordCell, WordExpr},
+    util::word::{Word, Word32Cell, WordCell, WordExpr},
 };
 
 use crate::{
@@ -25,7 +25,7 @@ use crate::{
     util::Expr,
 };
 use bus_mapping::evm::OpcodeId;
-use eth_types::{evm_types::GAS_STIPEND_CALL_WITH_VALUE, Field, ToLittleEndian, ToScalar, U256};
+use eth_types::{evm_types::GAS_STIPEND_CALL_WITH_VALUE, Field, ToLittleEndian, U256};
 use halo2_proofs::{circuit::Value, plonk::Error};
 
 /// Gadget for call related opcodes. It supports `OpcodeId::CALL`,
@@ -41,20 +41,20 @@ pub(crate) struct CallOpGadget<F> {
     is_staticcall: IsZeroGadget<F>,
     tx_id: Cell<F>,
     reversion_info: ReversionInfo<F>,
-    current_callee_address: Cell<F>,
-    current_caller_address: Cell<F>,
+    current_callee_address: WordCell<F>,
+    current_caller_address: WordCell<F>,
     is_static: Cell<F>,
     depth: Cell<F>,
     call: CommonCallGadget<F, true>,
-    current_value: Word<F>,
+    current_value: WordCell<F>,
     is_warm: Cell<F>,
     is_warm_prev: Cell<F>,
     callee_reversion_info: ReversionInfo<F>,
     transfer: TransferGadget<F>,
     // current handling Call* opcode's caller balance
-    caller_balance_word: Word<F>,
+    caller_balance_word: WordCell<F>,
     // check if insufficient balance case
-    is_insufficient_balance: LtWordGadget<F, WordCell<F>, WordCell<F>>,
+    is_insufficient_balance: LtWordGadget<F, WordCell<F>, Word32Cell<F>>,
     is_depth_ok: LtGadget<F, N_BYTES_U64>,
     one_64th_gas: ConstantDivisionGadget<F, N_BYTES_GAS>,
     capped_callee_gas_left: MinMaxGadget<F, N_BYTES_GAS>,
@@ -152,7 +152,7 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
 
         let caller_balance_word = cb.query_word_unchecked();
         cb.account_read(
-            caller_address.expr(),
+            caller_address.expr_unchecked(),
             AccountFieldTag::Balance,
             caller_balance_word.to_word(),
         );
@@ -181,8 +181,8 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
         let transfer = cb.condition(and::expr(&[is_call.expr(), is_precheck_ok.expr()]), |cb| {
             TransferGadget::construct(
                 cb,
-                caller_address.expr(),
-                callee_address.expr(),
+                caller_address.expr_unchecked(),
+                callee_address.expr_unchecked(),
                 not::expr(call_gadget.callee_not_exists.expr()),
                 call_gadget.value.clone(),
                 &mut callee_reversion_info,
@@ -322,7 +322,11 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
                         cb.curr.state.reversible_write_counter.expr() + 1.expr(),
                     ),
                 ] {
-                    cb.call_context_lookup(true.expr(), None, field_tag, value);
+                    cb.call_context_lookup_write_unchecked(
+                        None,
+                        field_tag,
+                        Word::from_lo_unchecked(value),
+                    );
                 }
 
                 // Setup next call's context.
@@ -332,20 +336,10 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
                     (CallContextFieldTag::CallerId, cb.curr.state.call_id.expr()),
                     (CallContextFieldTag::TxId, tx_id.expr()),
                     (CallContextFieldTag::Depth, depth.expr() + 1.expr()),
-                    (CallContextFieldTag::CallerAddress, caller_address),
-                    (CallContextFieldTag::CalleeAddress, callee_address),
                     (CallContextFieldTag::CallDataOffset, cd_address.offset()),
                     (CallContextFieldTag::CallDataLength, cd_address.length()),
                     (CallContextFieldTag::ReturnDataOffset, rd_address.offset()),
                     (CallContextFieldTag::ReturnDataLength, rd_address.length()),
-                    (
-                        CallContextFieldTag::Value,
-                        select::expr(
-                            is_delegatecall.expr(),
-                            current_value.expr(),
-                            call_gadget.value.expr(),
-                        ),
-                    ),
                     (
                         CallContextFieldTag::IsSuccess,
                         call_gadget.is_success.expr(),
@@ -359,13 +353,31 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
                     (CallContextFieldTag::LastCalleeReturnDataLength, 0.expr()),
                     (CallContextFieldTag::IsRoot, 0.expr()),
                     (CallContextFieldTag::IsCreate, 0.expr()),
+                ] {
+                    cb.call_context_lookup_write_unchecked(
+                        Some(callee_call_id.expr()),
+                        field_tag,
+                        Word::from_lo_unchecked(value),
+                    );
+                }
+
+                for (field_tag, value) in [
+                    (CallContextFieldTag::CallerAddress, caller_address),
+                    (CallContextFieldTag::CalleeAddress, callee_address),
+                    (
+                        CallContextFieldTag::Value,
+                        Word::select(
+                            is_delegatecall.expr(),
+                            current_value.to_word(),
+                            call_gadget.value.to_word(),
+                        ),
+                    ),
                     (
                         CallContextFieldTag::CodeHash,
-                        call_gadget.phase2_callee_code_hash.expr(),
+                        call_gadget.callee_code_hash.to_word(),
                     ),
                 ] {
-                    cb.call_context_lookup(
-                        true.expr(),
+                    cb.call_context_lookup_write_unchecked(
                         Some(callee_call_id.expr()),
                         field_tag,
                         value,
@@ -398,7 +410,7 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
                     call_id: To(callee_call_id.expr()),
                     is_root: To(false.expr()),
                     is_create: To(false.expr()),
-                    code_hash: To(call_gadget.phase2_callee_code_hash.expr()),
+                    code_hash: To(call_gadget.callee_code_hash.to_word()),
                     gas_left: To(callee_gas_left),
                     // For CALL opcode, `transfer` invocation has two account write if value is not
                     // zero.
@@ -554,24 +566,10 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
             call.rw_counter_end_of_reversion,
             call.is_persistent,
         )?;
-        self.current_callee_address.assign(
-            region,
-            offset,
-            Value::known(
-                current_callee_address
-                    .to_scalar()
-                    .expect("unexpected Address -> Scalar conversion failure"),
-            ),
-        )?;
-        self.current_caller_address.assign(
-            region,
-            offset,
-            Value::known(
-                current_caller_address
-                    .to_scalar()
-                    .expect("unexpected Address -> Scalar conversion failure"),
-            ),
-        )?;
+        self.current_callee_address
+            .assign_u256(region, offset, current_callee_address)?;
+        self.current_caller_address
+            .assign_u256(region, offset, current_caller_address)?;
         self.current_value
             .assign(region, offset, Some(current_value.to_le_bytes()))?;
         self.is_static
@@ -591,7 +589,7 @@ impl<F: Field> ExecutionGadget<F> for CallOpGadget<F> {
             rd_offset,
             rd_length,
             step.memory_word_size(),
-            region.word_rlc(callee_code_hash),
+            callee_code_hash,
         )?;
         self.is_warm
             .assign(region, offset, Value::known(F::from(is_warm as u64)))?;
