@@ -1,7 +1,7 @@
 use crate::{
     evm_circuit::{
         execution::ExecutionGadget,
-        param::{N_BYTES_ACCOUNT_ADDRESS, N_BYTES_GAS, N_BYTES_WORD},
+        param::{N_BYTES_ACCOUNT_ADDRESS, N_BYTES_GAS},
         step::ExecutionState,
         util::{
             and,
@@ -12,32 +12,40 @@ use crate::{
             },
             is_precompiled,
             math_gadget::{
-                ContractCreateGadget, IsEqualGadget, IsZeroGadget, MulWordByU64Gadget,
+                ContractCreateGadget, IsEqualWordGadget, IsZeroWordGadget, MulWordByU64Gadget,
                 RangeCheckGadget,
             },
-            not, or, select, CachedRegion, Cell, StepRws,
+            not, or, select, AccountAddress, CachedRegion, Cell, StepRws, U64Cell,
         },
         witness::{Block, Call, ExecStep, Transaction},
     },
     table::{AccountFieldTag, CallContextFieldTag, TxFieldTag as TxContextFieldTag},
-    util::{word::Word32Cell, Expr},
+    util::{
+        word::{Word, Word32Cell, WordCell, WordExpr},
+        Expr,
+    },
 };
-use eth_types::{evm_types::GasCost, Field, ToLittleEndian, ToScalar};
+use eth_types::{evm_types::GasCost, Field, ToLittleEndian, U256};
 use ethers_core::utils::{get_contract_address, keccak256};
 use gadgets::util::expr_from_bytes;
-use halo2_proofs::{circuit::Value, plonk::Error};
+use halo2_proofs::{
+    circuit::Value,
+    plonk::{Error, Expression},
+};
+use itertools::Itertools;
 
 #[derive(Clone, Debug)]
 pub(crate) struct BeginTxGadget<F> {
-    tx_id: Cell<F>,
+    // tx_id is query in current scope. The range should be determined here
+    tx_id: U64Cell<F>,
     tx_nonce: Cell<F>,
     tx_gas: Cell<F>,
     tx_gas_price: Word32Cell<F>,
     mul_gas_fee_by_gas: MulWordByU64Gadget<F>,
-    tx_caller_address: Cell<F>,
-    tx_caller_address_is_zero: IsZeroGadget<F>,
-    tx_callee_address: Cell<F>,
-    call_callee_address: Cell<F>,
+    tx_caller_address: AccountAddress<F>,
+    tx_caller_address_is_zero: IsZeroWordGadget<F, AccountAddress<F>>,
+    tx_callee_address: AccountAddress<F>,
+    call_callee_address: AccountAddress<F>,
     tx_is_create: Cell<F>,
     tx_value: Word32Cell<F>,
     tx_call_data_length: Cell<F>,
@@ -45,11 +53,11 @@ pub(crate) struct BeginTxGadget<F> {
     reversion_info: ReversionInfo<F>,
     sufficient_gas_left: RangeCheckGadget<F, N_BYTES_GAS>,
     transfer_with_gas_fee: TransferWithGasFeeGadget<F>,
-    phase2_code_hash: Cell<F>,
-    is_empty_code_hash: IsEqualGadget<F>,
-    caller_nonce_hash_bytes: [Cell<F>; N_BYTES_WORD],
+    code_hash: WordCell<F>,
+    is_empty_code_hash: IsEqualWordGadget<F, Word<Expression<F>>, Word<Expression<F>>>,
+    caller_nonce_hash_bytes: Word32Cell<F>,
     create: ContractCreateGadget<F, false>,
-    callee_not_exists: IsZeroGadget<F>,
+    callee_not_exists: IsZeroWordGadget<F, WordCell<F>>,
     is_caller_callee_equal: Cell<F>,
 }
 
@@ -62,46 +70,49 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         // Use rw_counter of the step which triggers next call as its call_id.
         let call_id = cb.curr.state.rw_counter.clone();
 
-        let tx_id = cb.query_cell();
+        let tx_id = cb.query_u64();
         cb.call_context_lookup_write_unchecked(
             Some(call_id.expr()),
             CallContextFieldTag::TxId,
-            tx_id.expr(),
+            tx_id.to_word(),
         ); // rwc_delta += 1
         let mut reversion_info = cb.reversion_info_write(None); // rwc_delta += 2
-        cb.call_context_lookup(
-            1.expr(),
+        cb.call_context_lookup_write_unchecked(
             Some(call_id.expr()),
             CallContextFieldTag::IsSuccess,
-            reversion_info.is_persistent(),
+            Word::from_lo_unchecked(reversion_info.is_persistent()),
         ); // rwc_delta += 1
 
-        let [tx_nonce, tx_gas, tx_caller_address, tx_callee_address, tx_is_create, tx_call_data_length, tx_call_data_gas_cost] =
-            [
-                TxContextFieldTag::Nonce,
-                TxContextFieldTag::Gas,
-                TxContextFieldTag::CallerAddress,
-                TxContextFieldTag::CalleeAddress,
-                TxContextFieldTag::IsCreate,
-                TxContextFieldTag::CallDataLength,
-                TxContextFieldTag::CallDataGasCost,
-            ]
-            .map(|field_tag| cb.tx_context(tx_id.expr(), field_tag, None));
-        let tx_caller_address_is_zero = IsZeroGadget::construct(cb, tx_caller_address.expr());
+        let [tx_nonce, tx_gas, tx_is_create, tx_call_data_length, tx_call_data_gas_cost] = [
+            TxContextFieldTag::Nonce,
+            TxContextFieldTag::Gas,
+            TxContextFieldTag::IsCreate,
+            TxContextFieldTag::CallDataLength,
+            TxContextFieldTag::CallDataGasCost,
+        ]
+        .map(|field_tag| cb.tx_context(tx_id.expr(), field_tag, None));
+        let [tx_gas_price, tx_value] = [TxContextFieldTag::GasPrice, TxContextFieldTag::Value]
+            .map(|field_tag| cb.tx_context_as_word32(tx_id.expr(), field_tag, None));
+
+        let [tx_caller_address, tx_callee_address] = [
+            TxContextFieldTag::CallerAddress,
+            TxContextFieldTag::CalleeAddress,
+        ]
+        .map(|field_tag| cb.tx_context_as_account_address(tx_id.expr(), field_tag, None));
+
+        let tx_caller_address_is_zero = IsZeroWordGadget::construct(cb, tx_caller_address);
         cb.require_equal(
             "CallerAddress != 0 (not a padding tx)",
             tx_caller_address_is_zero.expr(),
             false.expr(),
         );
-        let [tx_gas_price, tx_value] = [TxContextFieldTag::GasPrice, TxContextFieldTag::Value]
-            .map(|field_tag| cb.tx_context_as_word(tx_id.expr(), field_tag, None));
 
-        let call_callee_address = cb.query_cell();
+        let call_callee_address = cb.query_account_address();
         cb.condition(not::expr(tx_is_create.expr()), |cb| {
-            cb.require_equal(
+            cb.require_equal_word(
                 "Tx to non-zero address",
-                tx_callee_address.expr(),
-                call_callee_address.expr(),
+                tx_callee_address.to_word(),
+                call_callee_address.to_word(),
             );
         });
 
@@ -115,8 +126,8 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         cb.account_write(
             tx_caller_address.expr(),
             AccountFieldTag::Nonce,
-            tx_nonce.expr() + 1.expr(),
-            tx_nonce.expr(),
+            Word::from_lo_unchecked(tx_nonce.expr() + 1.expr()),
+            Word::from_lo_unchecked(tx_nonce.expr()),
             None,
         ); // rwc_delta += 1
 
@@ -142,26 +153,26 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         cb.account_access_list_write(
             tx_id.expr(),
             tx_caller_address.expr(),
-            1.expr(),
-            0.expr(),
+            Word::from_lo_unchecked(1.expr()),
+            Word::zero(),
             None,
         ); // rwc_delta += 1
         let is_caller_callee_equal = cb.query_bool();
         cb.account_access_list_write(
             tx_id.expr(),
             tx_callee_address.expr(),
-            1.expr(),
+            Word::from_lo_unchecked(1.expr()),
             // No extra constraint being used here.
             // Correctness will be enforced in build_tx_access_list_account_constraints
-            is_caller_callee_equal.expr(),
+            Word::from_lo_unchecked(is_caller_callee_equal.expr()),
             None,
         ); // rwc_delta += 1
 
         // Read code_hash of callee
-        let phase2_code_hash = cb.query_cell_phase2();
+        let code_hash = cb.query_word_unchecked();
         let is_empty_code_hash =
-            IsEqualGadget::construct(cb, phase2_code_hash.expr(), cb.empty_code_hash_rlc());
-        let callee_not_exists = IsZeroGadget::construct(cb, phase2_code_hash.expr());
+            IsEqualWordGadget::construct(cb, code_hash.to_word(), cb.empty_code_hash_word());
+        let callee_not_exists = IsZeroWordGadget::construct(cb, code_hash);
         // no_callee_code is true when the account exists and has empty
         // code hash, or when the account doesn't exist (which we encode with
         // code_hash = 0).
@@ -172,7 +183,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             cb.account_read(
                 tx_callee_address.expr(),
                 AccountFieldTag::CodeHash,
-                phase2_code_hash.expr(),
+                code_hash.to_word(),
             ); // rwc_delta += 1
         });
 
@@ -188,7 +199,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             &mut reversion_info,
         );
 
-        let caller_nonce_hash_bytes = array_init::array_init(|_| cb.query_byte());
+        let caller_nonce_hash_bytes = cb.query_word32();
         let create = ContractCreateGadget::construct(cb);
         cb.require_equal(
             "tx caller address equivalence",
@@ -199,7 +210,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             cb.require_equal(
                 "call callee address equivalence",
                 call_callee_address.expr(),
-                expr_from_bytes(&caller_nonce_hash_bytes[0..N_BYTES_ACCOUNT_ADDRESS]),
+                expr_from_bytes(&caller_nonce_hash_bytes.limbs[0..N_BYTES_ACCOUNT_ADDRESS]),
             );
         });
         cb.require_equal(
@@ -210,48 +221,56 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
 
         // 1. Handle contract creation transaction.
         cb.condition(tx_is_create.expr(), |cb| {
-            let output_rlc = cb.word_rlc::<N_BYTES_WORD>(
-                caller_nonce_hash_bytes
-                    .iter()
-                    .map(Expr::expr)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap(),
+            cb.keccak_table_lookup(
+                create.input_rlc(cb),
+                create.input_length(),
+                caller_nonce_hash_bytes.to_word(),
             );
-            cb.keccak_table_lookup(create.input_rlc(cb), create.input_length(), output_rlc);
 
             cb.account_write(
                 call_callee_address.expr(),
                 AccountFieldTag::Nonce,
-                1.expr(),
-                0.expr(),
+                Word::from_lo_unchecked(1.expr()),
+                Word::zero(),
                 Some(&mut reversion_info),
             );
             for (field_tag, value) in [
                 (CallContextFieldTag::Depth, 1.expr()),
-                (CallContextFieldTag::CallerAddress, tx_caller_address.expr()),
-                (
-                    CallContextFieldTag::CalleeAddress,
-                    call_callee_address.expr(),
-                ),
                 (CallContextFieldTag::CallDataOffset, 0.expr()),
                 (
                     CallContextFieldTag::CallDataLength,
                     tx_call_data_length.expr(),
                 ),
-                (CallContextFieldTag::Value, tx_value.expr()),
                 (CallContextFieldTag::IsStatic, 0.expr()),
                 (CallContextFieldTag::LastCalleeId, 0.expr()),
                 (CallContextFieldTag::LastCalleeReturnDataOffset, 0.expr()),
                 (CallContextFieldTag::LastCalleeReturnDataLength, 0.expr()),
                 (CallContextFieldTag::IsRoot, 1.expr()),
                 (CallContextFieldTag::IsCreate, 1.expr()),
+            ] {
+                cb.call_context_lookup_write_unchecked(
+                    Some(call_id.expr()),
+                    field_tag,
+                    Word::from_lo_unchecked(value),
+                );
+            }
+
+            for (field_tag, value) in [
+                (
+                    CallContextFieldTag::CallerAddress,
+                    tx_caller_address.to_word(),
+                ),
+                (
+                    CallContextFieldTag::CalleeAddress,
+                    call_callee_address.to_word(),
+                ),
+                (CallContextFieldTag::Value, tx_value.to_word()),
                 (
                     CallContextFieldTag::CodeHash,
-                    cb.curr.state.code_hash.expr(),
+                    cb.curr.state.code_hash.to_word(),
                 ),
             ] {
-                cb.call_context_lookup(true.expr(), Some(call_id.expr()), field_tag, value);
+                cb.call_context_lookup_write_unchecked(Some(call_id.expr()), field_tag, value);
             }
 
             cb.require_step_state_transition(StepStateTransition {
@@ -282,7 +301,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
                 call_id: To(call_id.expr()),
                 is_root: To(true.expr()),
                 is_create: To(tx_is_create.expr()),
-                code_hash: To(cb.curr.state.code_hash.expr()),
+                code_hash: To(cb.curr.state.code_hash.to_word()),
                 gas_left: To(gas_left.clone()),
                 // There are a + 1 reversible writes:
                 //  - a TransferWithGasFeeGadget
@@ -335,23 +354,38 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
                 // Setup first call's context.
                 for (field_tag, value) in [
                     (CallContextFieldTag::Depth, 1.expr()),
-                    (CallContextFieldTag::CallerAddress, tx_caller_address.expr()),
-                    (CallContextFieldTag::CalleeAddress, tx_callee_address.expr()),
                     (CallContextFieldTag::CallDataOffset, 0.expr()),
                     (
                         CallContextFieldTag::CallDataLength,
                         tx_call_data_length.expr(),
                     ),
-                    (CallContextFieldTag::Value, tx_value.expr()),
                     (CallContextFieldTag::IsStatic, 0.expr()),
                     (CallContextFieldTag::LastCalleeId, 0.expr()),
                     (CallContextFieldTag::LastCalleeReturnDataOffset, 0.expr()),
                     (CallContextFieldTag::LastCalleeReturnDataLength, 0.expr()),
                     (CallContextFieldTag::IsRoot, 1.expr()),
                     (CallContextFieldTag::IsCreate, tx_is_create.expr()),
-                    (CallContextFieldTag::CodeHash, phase2_code_hash.expr()),
                 ] {
-                    cb.call_context_lookup(true.expr(), Some(call_id.expr()), field_tag, value);
+                    cb.call_context_lookup_write_unchecked(
+                        Some(call_id.expr()),
+                        field_tag,
+                        Word::from_lo_unchecked(value),
+                    );
+                }
+
+                for (field_tag, value) in [
+                    (
+                        CallContextFieldTag::CallerAddress,
+                        tx_caller_address.to_word(),
+                    ),
+                    (
+                        CallContextFieldTag::CalleeAddress,
+                        tx_callee_address.to_word(),
+                    ),
+                    (CallContextFieldTag::Value, tx_value.to_word()),
+                    (CallContextFieldTag::CodeHash, code_hash.to_word()),
+                ] {
+                    cb.call_context_lookup_write_unchecked(Some(call_id.expr()), field_tag, value);
                 }
 
                 cb.require_step_state_transition(StepStateTransition {
@@ -382,7 +416,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
                     call_id: To(call_id.expr()),
                     is_root: To(true.expr()),
                     is_create: To(tx_is_create.expr()),
-                    code_hash: To(phase2_code_hash.expr()),
+                    code_hash: To(code_hash.to_word()),
                     gas_left: To(gas_left),
                     reversible_write_counter: To(transfer_with_gas_fee.reversible_w_delta()),
                     log_id: To(0.expr()),
@@ -408,7 +442,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             reversion_info,
             sufficient_gas_left,
             transfer_with_gas_fee,
-            phase2_code_hash,
+            code_hash,
             is_empty_code_hash,
             caller_nonce_hash_bytes,
             create,
@@ -450,7 +484,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         };
 
         self.tx_id
-            .assign(region, offset, Value::known(F::from(tx.id as u64)))?;
+            .assign(region, offset, Some(tx.id.to_le_bytes()))?;
         self.tx_nonce
             .assign(region, offset, Value::known(F::from(tx.nonce)))?;
         self.tx_gas
@@ -459,37 +493,55 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             .assign(region, offset, Some(tx.gas_price.to_le_bytes()))?;
         self.mul_gas_fee_by_gas
             .assign(region, offset, tx.gas_price, tx.gas, gas_fee)?;
-        let caller_address = tx
-            .caller_address
-            .to_scalar()
-            .expect("unexpected Address -> Scalar conversion failure");
-        let callee_address = tx
-            .callee_address
-            .to_scalar()
-            .expect("unexpected Address -> Scalar conversion failure");
-        self.tx_caller_address
-            .assign(region, offset, Value::known(caller_address))?;
-        self.tx_caller_address_is_zero
-            .assign(region, offset, caller_address)?;
-        self.tx_callee_address
-            .assign(region, offset, Value::known(callee_address))?;
+        self.tx_caller_address.assign(
+            region,
+            offset,
+            tx.caller_address
+                .to_fixed_bytes()
+                .iter()
+                .rev() // From H160 big endian to small endian
+                .map(|b| *b)
+                .collect_vec()
+                .try_into()
+                .ok(),
+        )?;
+        self.tx_caller_address_is_zero.assign_u256(
+            region,
+            offset,
+            U256::from_big_endian(&tx.caller_address.to_fixed_bytes()),
+        )?;
+        self.tx_callee_address.assign(
+            region,
+            offset,
+            tx.callee_address
+                .to_fixed_bytes()
+                .iter()
+                .rev() // From H160 big endian to little endian
+                .map(|b| *b)
+                .collect_vec()
+                .try_into()
+                .ok(),
+        )?;
         self.call_callee_address.assign(
             region,
             offset,
-            Value::known(
-                if tx.is_create {
-                    get_contract_address(tx.caller_address, tx.nonce)
-                } else {
-                    tx.callee_address
-                }
-                .to_scalar()
-                .expect("unexpected Address -> Scalar conversion failure"),
-            ),
+            if tx.is_create {
+                get_contract_address(tx.caller_address, tx.nonce)
+            } else {
+                tx.callee_address
+            }
+            .to_fixed_bytes()
+            .iter()
+            .rev() // From H160 big endian to little endian
+            .map(|b| *b)
+            .collect_vec()
+            .try_into()
+            .ok(),
         )?;
         self.is_caller_callee_equal.assign(
             region,
             offset,
-            Value::known(F::from((caller_address == callee_address) as u64)),
+            Value::known(F::from((tx.caller_address == tx.callee_address) as u64)),
         )?;
         self.tx_is_create
             .assign(region, offset, Value::known(F::from(tx.is_create as u64)))?;
@@ -520,16 +572,12 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             tx.value,
             gas_fee,
         )?;
-        self.phase2_code_hash
-            .assign(region, offset, region.word_rlc(callee_code_hash))?;
-        self.is_empty_code_hash.assign_value(
-            region,
-            offset,
-            region.word_rlc(callee_code_hash),
-            region.empty_code_hash_rlc(),
-        )?;
+        self.code_hash
+            .assign(region, offset, Some(callee_code_hash.to_le_bytes()))?;
+        self.is_empty_code_hash
+            .assign_u256(region, offset, callee_code_hash, zero)?;
         self.callee_not_exists
-            .assign_value(region, offset, region.word_rlc(callee_code_hash))?;
+            .assign_u256(region, offset, callee_code_hash)?;
 
         let untrimmed_contract_addr = {
             let mut stream = ethers_core::utils::rlp::RlpStream::new();
@@ -539,14 +587,8 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             let rlp_encoding = stream.out().to_vec();
             keccak256(&rlp_encoding)
         };
-        for (c, v) in self
-            .caller_nonce_hash_bytes
-            .iter()
-            .rev()
-            .zip(untrimmed_contract_addr.iter())
-        {
-            c.assign(region, offset, Value::known(F::from(*v as u64)))?;
-        }
+        self.caller_nonce_hash_bytes
+            .assign(region, offset, Some(untrimmed_contract_addr))?;
         self.create.assign(
             region,
             offset,
