@@ -17,7 +17,7 @@ use crate::{
     table::{CallContextFieldTag, RwTableTag, TxLogFieldTag},
     util::{
         build_tx_log_expression,
-        word::{Word, WordCell, WordExpr},
+        word::{Word, Word32Cell, WordCell, WordExpr},
         Expr,
     },
 };
@@ -34,7 +34,7 @@ pub(crate) struct LogGadget<F> {
     same_context: SameContextGadget<F>,
     // memory address
     memory_address: MemoryAddressGadget<F>,
-    phase2_topics: [Cell<F>; 4],
+    topics: [Word32Cell<F>; 4],
     topic_selectors: [Cell<F>; 4],
 
     contract_address: WordCell<F>,
@@ -81,19 +81,19 @@ impl<F: Field> ExecutionGadget<F> for LogGadget<F> {
         });
 
         // constrain topics in logs
-        let phase2_topics = array_init(|_| cb.query_cell_phase2());
+        let topics = array_init(|_| cb.query_word32());
         let topic_selectors: [Cell<F>; 4] = array_init(|_| cb.query_cell());
-        for (idx, topic) in phase2_topics.iter().enumerate() {
+        for (idx, topic) in topics.iter().enumerate() {
             cb.condition(topic_selectors[idx].expr(), |cb| {
-                cb.stack_pop(Word::from_lo_unchecked(topic.expr()));
+                cb.stack_pop(topic.to_word());
             });
             cb.condition(topic_selectors[idx].expr() * is_persistent.expr(), |cb| {
-                cb.tx_log_lookup(
+                cb.tx_log_lookup_word(
                     tx_id.expr(),
                     cb.curr.state.log_id.expr() + 1.expr(),
                     TxLogFieldTag::Topic,
                     idx.expr(),
-                    topic.expr(),
+                    topic.to_word(),
                 );
             });
         }
@@ -177,7 +177,7 @@ impl<F: Field> ExecutionGadget<F> for LogGadget<F> {
         Self {
             same_context,
             memory_address,
-            phase2_topics,
+            topics,
             topic_selectors,
             contract_address,
             is_static_call,
@@ -223,15 +223,15 @@ impl<F: Field> ExecutionGadget<F> for LogGadget<F> {
         };
 
         for i in 0..4 {
-            let mut topic = region.word_rlc(U256::zero());
+            let mut topic = U256::zero();
             if i < topic_count {
-                topic = region.word_rlc(block.rws[topic_stack_entry].stack_value());
+                topic = block.rws[topic_stack_entry].stack_value();
                 self.topic_selectors[i].assign(region, offset, Value::known(F::ONE))?;
                 topic_stack_entry.1 += 1;
             } else {
                 self.topic_selectors[i].assign(region, offset, Value::known(F::ZERO))?;
             }
-            self.phase2_topics[i].assign(region, offset, topic)?;
+            self.topics[i].assign_u256(region, offset, topic)?;
         }
 
         self.contract_address
