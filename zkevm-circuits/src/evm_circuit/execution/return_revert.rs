@@ -17,7 +17,7 @@ use crate::{
     },
     table::{AccountFieldTag, CallContextFieldTag},
     util::{
-        word::{Word, Word32Cell, WordExpr},
+        word::{Word, Word32Cell, WordCell, WordExpr},
         Expr,
     },
 };
@@ -45,7 +45,7 @@ pub(crate) struct ReturnRevertGadget<F> {
     code_hash: Word32Cell<F>,
 
     caller_id: Cell<F>,
-    address: Cell<F>,
+    address: WordCell<F>,
     reversion_info: ReversionInfo<F>,
 }
 
@@ -116,15 +116,14 @@ impl<F: Field> ExecutionGadget<F> for ReturnRevertGadget<F> {
                     copy_rw_increase.expr(),
                 );
 
-                let [caller_id, address] = [
-                    CallContextFieldTag::CallerId,
-                    CallContextFieldTag::CalleeAddress,
-                ]
-                .map(|tag| cb.call_context(None, tag));
+                let caller_id = cb.call_context(None, CallContextFieldTag::CallerId);
+                let address =
+                    cb.call_context_read_as_word(None, CallContextFieldTag::CalleeAddress);
+
                 let mut reversion_info = cb.reversion_info_read(None);
 
                 cb.account_write(
-                    address.expr(),
+                    address.to_word().expr_unchecked(),
                     AccountFieldTag::CodeHash,
                     code_hash.to_word(),
                     cb.empty_code_hash_word(),
@@ -322,11 +321,7 @@ impl<F: Field> ExecutionGadget<F> for ReturnRevertGadget<F> {
             Value::known(call.caller_id.to_scalar().unwrap()),
         )?;
 
-        self.address.assign(
-            region,
-            offset,
-            Value::known(call.address.to_scalar().unwrap()),
-        )?;
+        self.address.assign_h160(region, offset, call.address)?;
 
         self.reversion_info.assign(
             region,

@@ -22,7 +22,7 @@ use halo2_proofs::{circuit::Value, plonk::Error};
 #[derive(Clone, Debug)]
 pub(crate) struct SelfbalanceGadget<F> {
     same_context: SameContextGadget<F>,
-    callee_address: Cell<F>,
+    callee_address: WordCell<F>,
     self_balance: WordCell<F>,
 }
 
@@ -32,11 +32,11 @@ impl<F: Field> ExecutionGadget<F> for SelfbalanceGadget<F> {
     const EXECUTION_STATE: ExecutionState = ExecutionState::SELFBALANCE;
 
     fn configure(cb: &mut EVMConstraintBuilder<F>) -> Self {
-        let callee_address = cb.call_context(None, CallContextFieldTag::CalleeAddress);
+        let callee_address = cb.call_context_read_as_word(None, CallContextFieldTag::CalleeAddress);
 
         let self_balance = cb.query_word_unchecked();
         cb.account_read(
-            callee_address.expr(),
+            callee_address.to_word().expr_unchecked(),
             AccountFieldTag::Balance,
             self_balance.to_word(),
         );
@@ -71,15 +71,8 @@ impl<F: Field> ExecutionGadget<F> for SelfbalanceGadget<F> {
     ) -> Result<(), Error> {
         self.same_context.assign_exec_step(region, offset, step)?;
 
-        self.callee_address.assign(
-            region,
-            offset,
-            Value::known(
-                call.address
-                    .to_scalar()
-                    .expect("unexpected Address -> Scalar conversion failure"),
-            ),
-        )?;
+        self.callee_address
+            .assign_h160(region, offset, call.address)?;
 
         let self_balance = block.rws[step.rw_indices[2]].stack_value();
         self.self_balance

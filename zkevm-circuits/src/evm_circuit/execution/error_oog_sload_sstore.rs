@@ -23,7 +23,7 @@ use crate::{
 };
 use eth_types::{
     evm_types::{GasCost, OpcodeId},
-    Field, ToLittleEndian, ToScalar, U256,
+    Field, ToLittleEndian, U256,
 };
 use halo2_proofs::{circuit::Value, plonk::Error};
 
@@ -34,7 +34,7 @@ pub(crate) struct ErrorOOGSloadSstoreGadget<F> {
     opcode: Cell<F>,
     tx_id: Cell<F>,
     is_static: Cell<F>,
-    callee_address: Cell<F>,
+    callee_address: WordCell<F>,
     key: WordCell<F>,
     value: WordCell<F>,
     value_prev: WordCell<F>,
@@ -65,7 +65,7 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGSloadSstoreGadget<F> {
 
         let tx_id = cb.call_context(None, CallContextFieldTag::TxId);
         let is_static = cb.call_context(None, CallContextFieldTag::IsStatic);
-        let callee_address = cb.call_context(None, CallContextFieldTag::CalleeAddress);
+        let callee_address = cb.call_context_read_as_word(None, CallContextFieldTag::CalleeAddress);
 
         // Constrain `is_static` must be false for SSTORE.
         cb.require_zero("is_static == false", is_static.expr() * is_sstore.expr().0);
@@ -79,7 +79,7 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGSloadSstoreGadget<F> {
         cb.stack_pop(key.to_word());
         cb.account_storage_access_list_read(
             tx_id.expr(),
-            callee_address.expr(),
+            callee_address.to_word().expr_unchecked(),
             key.to_word(),
             Word::from_lo_unchecked(is_warm.expr()),
         );
@@ -89,7 +89,7 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGSloadSstoreGadget<F> {
             cb.stack_pop(value.to_word());
 
             cb.account_storage_read(
-                callee_address.expr(),
+                callee_address.to_word().expr_unchecked(),
                 key.to_word(),
                 value_prev.to_word(),
                 tx_id.expr(),
@@ -193,15 +193,8 @@ impl<F: Field> ExecutionGadget<F> for ErrorOOGSloadSstoreGadget<F> {
             .assign(region, offset, Value::known(F::from(tx.id as u64)))?;
         self.is_static
             .assign(region, offset, Value::known(F::from(call.is_static as u64)))?;
-        self.callee_address.assign(
-            region,
-            offset,
-            Value::known(
-                call.address
-                    .to_scalar()
-                    .expect("unexpected Address -> Scalar conversion failure"),
-            ),
-        )?;
+        self.callee_address
+            .assign_h160(region, offset, call.address)?;
         self.key.assign(region, offset, Some(key.to_le_bytes()))?;
         self.value
             .assign(region, offset, Some(value.to_le_bytes()))?;

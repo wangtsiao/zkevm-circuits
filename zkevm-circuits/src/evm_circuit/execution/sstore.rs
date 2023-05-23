@@ -16,12 +16,12 @@ use crate::{
     },
     table::CallContextFieldTag,
     util::{
-        word::{Word, Word32Cell, WordExpr},
+        word::{Word, Word32Cell, WordCell, WordExpr},
         Expr,
     },
 };
 
-use eth_types::{evm_types::GasCost, Field, ToLittleEndian, ToScalar};
+use eth_types::{evm_types::GasCost, Field, ToLittleEndian};
 use halo2_proofs::{
     circuit::Value,
     plonk::{Error, Expression},
@@ -33,7 +33,7 @@ pub(crate) struct SstoreGadget<F> {
     tx_id: Cell<F>,
     is_static: Cell<F>,
     reversion_info: ReversionInfo<F>,
-    callee_address: Cell<F>,
+    callee_address: WordCell<F>,
     key: Word32Cell<F>,
     value: Word32Cell<F>,
     value_prev: Word32Cell<F>,
@@ -61,7 +61,7 @@ impl<F: Field> ExecutionGadget<F> for SstoreGadget<F> {
         cb.require_zero("is_static is false", is_static.expr());
 
         let mut reversion_info = cb.reversion_info_write(None);
-        let callee_address = cb.call_context(None, CallContextFieldTag::CalleeAddress);
+        let callee_address = cb.call_context_read_as_word(None, CallContextFieldTag::CalleeAddress);
 
         let key = cb.query_word32();
         // Pop the key from the stack
@@ -74,7 +74,7 @@ impl<F: Field> ExecutionGadget<F> for SstoreGadget<F> {
         let value_prev = cb.query_word32();
         let original_value = cb.query_word32();
         cb.account_storage_write(
-            callee_address.expr(),
+            callee_address.to_word().expr_unchecked(),
             key.to_word(),
             value.to_word(),
             value_prev.to_word(),
@@ -86,7 +86,7 @@ impl<F: Field> ExecutionGadget<F> for SstoreGadget<F> {
         let is_warm = cb.query_bool();
         cb.account_storage_access_list_write(
             tx_id.expr(),
-            callee_address.expr(),
+            callee_address.to_word().expr_unchecked(),
             key.to_word(),
             Word::from_lo_unchecked(true.expr()),
             Word::from_lo_unchecked(is_warm.expr()),
@@ -172,15 +172,8 @@ impl<F: Field> ExecutionGadget<F> for SstoreGadget<F> {
             call.rw_counter_end_of_reversion,
             call.is_persistent,
         )?;
-        self.callee_address.assign(
-            region,
-            offset,
-            Value::known(
-                call.address
-                    .to_scalar()
-                    .expect("unexpected Address -> Scalar conversion failure"),
-            ),
-        )?;
+        self.callee_address
+            .assign_h160(region, offset, call.address)?;
 
         let [key, value] =
             [step.rw_indices[5], step.rw_indices[6]].map(|idx| block.rws[idx].stack_value());

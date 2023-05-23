@@ -17,7 +17,7 @@ use crate::{
     table::{CallContextFieldTag, RwTableTag, TxLogFieldTag},
     util::{
         build_tx_log_expression,
-        word::{Word, WordExpr},
+        word::{Word, WordCell, WordExpr},
         Expr,
     },
 };
@@ -37,7 +37,7 @@ pub(crate) struct LogGadget<F> {
     phase2_topics: [Cell<F>; 4],
     topic_selectors: [Cell<F>; 4],
 
-    contract_address: Cell<F>,
+    contract_address: WordCell<F>,
     is_static_call: Cell<F>,
     is_persistent: Cell<F>,
     tx_id: Cell<F>,
@@ -65,17 +65,18 @@ impl<F: Field> ExecutionGadget<F> for LogGadget<F> {
 
         // check contract_address in CallContext & TxLog
         // use call context's  callee address as contract address
-        let contract_address = cb.call_context(None, CallContextFieldTag::CalleeAddress);
+        let contract_address =
+            cb.call_context_read_as_word(None, CallContextFieldTag::CalleeAddress);
         let is_persistent = cb.call_context(None, CallContextFieldTag::IsPersistent);
         cb.require_boolean("is_persistent is bool", is_persistent.expr());
 
         cb.condition(is_persistent.expr(), |cb| {
-            cb.tx_log_lookup(
+            cb.tx_log_lookup_word(
                 tx_id.expr(),
                 cb.curr.state.log_id.expr() + 1.expr(),
                 TxLogFieldTag::Address,
                 0.expr(),
-                contract_address.expr(),
+                contract_address.to_word(),
             );
         });
 
@@ -233,15 +234,8 @@ impl<F: Field> ExecutionGadget<F> for LogGadget<F> {
             self.phase2_topics[i].assign(region, offset, topic)?;
         }
 
-        self.contract_address.assign(
-            region,
-            offset,
-            Value::known(
-                call.address
-                    .to_scalar()
-                    .expect("unexpected Address -> Scalar conversion failure"),
-            ),
-        )?;
+        self.contract_address
+            .assign_h160(region, offset, call.address)?;
 
         self.is_static_call
             .assign(region, offset, Value::known(F::from(call.is_static as u64)))?;

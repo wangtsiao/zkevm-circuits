@@ -17,7 +17,7 @@ use crate::{
         Expr,
     },
 };
-use eth_types::{Field, ToLittleEndian, ToScalar};
+use eth_types::{Field, ToLittleEndian};
 use halo2_proofs::{circuit::Value, plonk::Error};
 
 #[derive(Clone, Debug)]
@@ -25,7 +25,7 @@ pub(crate) struct SloadGadget<F> {
     same_context: SameContextGadget<F>,
     tx_id: Cell<F>,
     reversion_info: ReversionInfo<F>,
-    callee_address: Cell<F>,
+    callee_address: WordCell<F>,
     key: WordCell<F>,
     value: WordCell<F>,
     committed_value: WordCell<F>,
@@ -42,7 +42,7 @@ impl<F: Field> ExecutionGadget<F> for SloadGadget<F> {
 
         let tx_id = cb.call_context(None, CallContextFieldTag::TxId);
         let mut reversion_info = cb.reversion_info_read(None);
-        let callee_address = cb.call_context(None, CallContextFieldTag::CalleeAddress);
+        let callee_address = cb.call_context_read_as_word(None, CallContextFieldTag::CalleeAddress);
 
         let key = cb.query_word_unchecked();
         // Pop the key from the stack
@@ -51,7 +51,7 @@ impl<F: Field> ExecutionGadget<F> for SloadGadget<F> {
         let value = cb.query_word_unchecked();
         let committed_value = cb.query_word_unchecked();
         cb.account_storage_read(
-            callee_address.expr(),
+            callee_address.to_word().expr_unchecked(),
             key.to_word(),
             value.to_word(),
             tx_id.expr(),
@@ -63,7 +63,7 @@ impl<F: Field> ExecutionGadget<F> for SloadGadget<F> {
         let is_warm = cb.query_bool();
         cb.account_storage_access_list_write(
             tx_id.expr(),
-            callee_address.expr(),
+            callee_address.to_word().expr_unchecked(),
             key.to_word(),
             Word::from_lo_unchecked(true.expr()),
             Word::from_lo_unchecked(is_warm.expr()),
@@ -111,15 +111,8 @@ impl<F: Field> ExecutionGadget<F> for SloadGadget<F> {
             call.rw_counter_end_of_reversion,
             call.is_persistent,
         )?;
-        self.callee_address.assign(
-            region,
-            offset,
-            Value::known(
-                call.address
-                    .to_scalar()
-                    .expect("unexpected Address -> Scalar conversion failure"),
-            ),
-        )?;
+        self.callee_address
+            .assign_h160(region, offset, call.address)?;
 
         let [key, value] =
             [step.rw_indices[4], step.rw_indices[6]].map(|idx| block.rws[idx].stack_value());
