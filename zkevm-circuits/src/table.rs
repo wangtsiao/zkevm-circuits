@@ -937,19 +937,15 @@ impl KeccakTable {
         let input_len = F::from(input.len() as u64);
         let mut keccak = Keccak::default();
         keccak.update(input);
-        let output = keccak.digest();
-        let output_rlc = challenges.evm_word().map(|challenge| {
-            rlc::value(
-                &Word::from_big_endian(output.as_slice()).to_le_bytes(),
-                challenge,
-            )
-        });
+        // TODO: Does the endianess make sense?
+        let output = word::Word32::new(&keccak.digest()).to_word();
 
         vec![[
             Value::known(F::ONE),
             input_rlc,
             Value::known(input_len),
-            output_rlc,
+            Value::known(output.lo()),
+            Value::known(output.hi()),
         ]]
     }
 
@@ -958,7 +954,7 @@ impl KeccakTable {
         &self,
         region: &mut Region<F>,
         offset: usize,
-        values: [Value<F>; 4],
+        values: [Value<F>; 5],
     ) -> Result<(), Error> {
         for (&column, value) in <KeccakTable as LookupTable<F>>::advice_columns(self)
             .iter()

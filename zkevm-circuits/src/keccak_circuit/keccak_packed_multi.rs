@@ -1,5 +1,5 @@
 use super::{cell_manager::*, param::*, util::*};
-use crate::{evm_circuit::util::rlc, util::Challenges};
+use crate::{evm_circuit::util::rlc, util::{Challenges, word::Word}};
 use eth_types::Field;
 use halo2_proofs::{
     circuit::Value,
@@ -67,7 +67,7 @@ pub(crate) struct KeccakRow<F: Field> {
     pub(crate) cell_values: Vec<F>,
     pub(crate) length: usize,
     pub(crate) data_rlc: Value<F>,
-    pub(crate) hash_rlc: Value<F>,
+    pub(crate) hash: Word<Value<F>>,
 }
 
 /// Part
