@@ -1039,7 +1039,7 @@ pub struct CopyTable {
     /// 1. Call ID/Caller ID for CopyDataType::Memory
     /// 2. RLC encoding of bytecode hash for CopyDataType::Bytecode
     /// 3. Transaction ID for CopyDataType::TxCalldata, CopyDataType::TxLog
-    pub id: Column<Advice>,
+    pub id: word::Word<Column<Advice>>,
     /// The source/destination address for this copy step.  Can be memory
     /// address, byte index in the bytecode, tx call data, and tx log data.
     pub addr: Column<Advice>,
@@ -1071,7 +1071,10 @@ impl CopyTable {
     pub fn construct<F: Field>(meta: &mut ConstraintSystem<F>, q_enable: Column<Fixed>) -> Self {
         Self {
             is_first: meta.advice_column(),
-            id: meta.advice_column_in(SecondPhase),
+            id: word::Word::new([
+                meta.advice_column_in(SecondPhase),
+                meta.advice_column_in(SecondPhase),
+            ]),
             tag: BinaryNumberChip::configure(meta, q_enable, None),
             addr: meta.advice_column(),
             src_addr_end: meta.advice_column(),
@@ -1273,7 +1276,8 @@ impl<F: Field> LookupTable<F> for CopyTable {
     fn columns(&self) -> Vec<Column<Any>> {
         vec![
             self.is_first.into(),
-            self.id.into(),
+            self.id.lo(),
+            self.id.hi(),
             self.addr.into(),
             self.src_addr_end.into(),
             self.bytes_left.into(),
@@ -1286,7 +1290,8 @@ impl<F: Field> LookupTable<F> for CopyTable {
     fn annotations(&self) -> Vec<String> {
         vec![
             String::from("is_first"),
-            String::from("id"),
+            String::from("id lo"),
+            String::from("id hi"),
             String::from("addr"),
             String::from("src_addr_end"),
             String::from("bytes_left"),
