@@ -42,9 +42,9 @@ pub(crate) struct BeginTxGadget<F> {
     tx_gas: Cell<F>,
     tx_gas_price: Word32Cell<F>,
     mul_gas_fee_by_gas: MulWordByU64Gadget<F>,
-    tx_caller_address: AccountAddress<F>,
-    tx_caller_address_is_zero: IsZeroWordGadget<F, AccountAddress<F>>,
-    tx_callee_address: AccountAddress<F>,
+    tx_caller_address: WordCell<F>,
+    tx_caller_address_is_zero: IsZeroWordGadget<F, WordCell<F>>,
+    tx_callee_address: WordCell<F>,
     call_callee_address: AccountAddress<F>,
     tx_is_create: Cell<F>,
     tx_value: Word32Cell<F>,
@@ -98,7 +98,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             TxContextFieldTag::CallerAddress,
             TxContextFieldTag::CalleeAddress,
         ]
-        .map(|field_tag| cb.tx_context_as_account_address(tx_id.expr(), field_tag, None));
+        .map(|field_tag| cb.tx_context_as_word(tx_id.expr(), field_tag, None));
 
         let tx_caller_address_is_zero = IsZeroWordGadget::construct(cb, tx_caller_address);
         cb.require_equal(
@@ -124,7 +124,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         // Increase caller's nonce.
         // (tx caller's nonce always increases even tx ends with error)
         cb.account_write(
-            tx_caller_address.expr(),
+            tx_caller_address.to_word().expr_unchecked(),
             AccountFieldTag::Nonce,
             Word::from_lo_unchecked(tx_nonce.expr() + 1.expr()),
             Word::from_lo_unchecked(tx_nonce.expr()),
@@ -152,7 +152,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         // Prepare access list of caller and callee
         cb.account_access_list_write(
             tx_id.expr(),
-            tx_caller_address.expr(),
+            tx_caller_address.to_word().expr_unchecked(),
             Word::from_lo_unchecked(1.expr()),
             Word::zero(),
             None,
@@ -160,7 +160,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         let is_caller_callee_equal = cb.query_bool();
         cb.account_access_list_write(
             tx_id.expr(),
-            tx_callee_address.expr(),
+            tx_callee_address.to_word().expr_unchecked(),
             Word::from_lo_unchecked(1.expr()),
             // No extra constraint being used here.
             // Correctness will be enforced in build_tx_access_list_account_constraints
@@ -181,7 +181,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         // TODO: And not precompile
         cb.condition(not::expr(tx_is_create.expr()), |cb| {
             cb.account_read(
-                tx_callee_address.expr(),
+                tx_callee_address.to_word().expr_unchecked(),
                 AccountFieldTag::CodeHash,
                 code_hash.to_word(),
             ); // rwc_delta += 1
@@ -190,8 +190,8 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         // Transfer value from caller to callee, creating account if necessary.
         let transfer_with_gas_fee = TransferWithGasFeeGadget::construct(
             cb,
-            tx_caller_address.expr(),
-            tx_callee_address.expr(),
+            tx_caller_address.to_word().expr_unchecked(),
+            tx_callee_address.to_word().expr_unchecked(),
             not::expr(callee_not_exists.expr()),
             or::expr([tx_is_create.expr(), callee_not_exists.expr()]),
             tx_value.clone(),
@@ -203,7 +203,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         let create = ContractCreateGadget::construct(cb);
         cb.require_equal(
             "tx caller address equivalence",
-            tx_caller_address.expr(),
+            tx_caller_address.to_word().expr_unchecked(),
             create.caller_address(),
         );
         cb.condition(tx_is_create.expr(), |cb| {
